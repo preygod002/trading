@@ -229,6 +229,27 @@ input:checked+.slider:before{transform:translateX(20px)}
   white-space:nowrap;pointer-events:none}
 .toast.show{transform:translateX(-50%) translateY(0)}
 
+
+/* ── BT mode switch ── */
+.bt-mode-switch{display:flex;gap:8px;margin-bottom:14px}
+.bt-mode-btn{flex:1;padding:10px 6px;border-radius:11px;border:1px solid var(--border);
+  background:var(--card2);color:var(--muted);font-size:12px;font-weight:700;
+  cursor:pointer;transition:.2s;text-align:center}
+.bt-mode-btn:active{transform:scale(.97)}
+.bt-mode-btn.active{background:rgba(56,189,248,.15);color:var(--accent);
+  border-color:var(--accent)}
+
+/* ── Leaderboard ── */
+.lb-row{display:flex;align-items:center;gap:8px;padding:9px 0;
+  border-bottom:1px solid rgba(255,255,255,.05);font-size:13px}
+.lb-row:last-child{border-bottom:none}
+.lb-rank{font-size:15px;font-weight:800;width:28px;flex-shrink:0;text-align:center}
+.lb-rank.top3{color:var(--yellow)}
+.lb-ticker{font-weight:700;flex:1;color:var(--text)}
+.lb-ret{font-weight:700;color:var(--green);width:60px;text-align:right}
+.lb-wr{color:var(--muted);font-size:11px;width:48px;text-align:right}
+.lb-pf{color:var(--accent);font-size:11px;width:40px;text-align:right}
+.lb-dd{color:var(--red);font-size:11px;width:48px;text-align:right}
 /* ── Divider ── */
 .divider{height:1px;background:var(--border);margin:12px 0}
 ::-webkit-scrollbar{width:0}
@@ -379,129 +400,213 @@ input:checked+.slider:before{transform:translateX(20px)}
   <!-- ═══ TAB: BACKTEST ═══ -->
   <div class="content" id="tab-backtest" style="display:none">
 
-    <!-- Input form -->
-    <div class="card" id="bt-form-card">
-      <div class="card-title">🔬 Backtest Setup</div>
-
-      <div class="bt-input-row">
-        <label>Stock Ticker (NSE)</label>
-        <input class="bt-input" id="bt-ticker" type="text" placeholder="e.g. RELIANCE" value="RELIANCE"
-               style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
-      </div>
-
-      <div class="bt-row2">
-        <div class="bt-input-row">
-          <label>Start Date</label>
-          <input class="bt-input" id="bt-start" type="date" value="2022-01-01">
-        </div>
-        <div class="bt-input-row">
-          <label>End Date</label>
-          <input class="bt-input" id="bt-end" type="date">
-        </div>
-      </div>
-
-      <div class="divider"></div>
-      <div style="font-size:10px;font-weight:700;color:var(--muted);
-        text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px">
-        Override Parameters (optional)
-      </div>
-
-      <div class="bt-row2">
-        <div class="bt-input-row">
-          <label>EMA Proximity (%×)</label>
-          <input class="bt-input" id="bt-ema" type="number" step="0.001" placeholder="use current">
-        </div>
-        <div class="bt-input-row">
-          <label>Max Candle Rng (%×)</label>
-          <input class="bt-input" id="bt-rng" type="number" step="0.001" placeholder="use current">
-        </div>
-      </div>
-      <div class="bt-row2">
-        <div class="bt-input-row">
-          <label>Max SL % (%×)</label>
-          <input class="bt-input" id="bt-sl" type="number" step="0.005" placeholder="use current">
-        </div>
-        <div class="bt-input-row">
-          <label>Initial Capital (₹)</label>
-          <input class="bt-input" id="bt-cap" type="number" step="10000" placeholder="100000">
-        </div>
-      </div>
-
-      <div class="bt-tg-row">
-        <div>
-          <div class="bt-tg-label">Send CSV to Telegram</div>
-          <div class="bt-tg-sub">Sends summary + trade CSV after backtest</div>
-        </div>
-        <label class="toggle">
-          <input type="checkbox" id="bt-tg-toggle">
-          <span class="slider"></span>
-        </label>
-      </div>
-
-      <button class="btn btn-blue" id="bt-run-btn" onclick="runBacktest()" style="margin-top:6px">
-        ▶ Run Backtest (All 3 Exits)
+    <!-- Mode selector -->
+    <div class="bt-mode-switch">
+      <button class="bt-mode-btn active" id="bm-single" onclick="switchBtMode('single')">
+        📈 Single Stock
+      </button>
+      <button class="bt-mode-btn" id="bm-full" onclick="switchBtMode('full')">
+        🏭 All F&amp;O Stocks
       </button>
     </div>
 
-    <!-- Progress -->
-    <div class="card" id="bt-prog-card" style="display:none">
-      <div class="card-title">Running Backtest…</div>
-      <div class="bt-steps">
-        <div class="bt-step" id="bts-0">Fetch Data</div>
-        <div class="bt-step" id="bts-1">Exit 2R</div>
-        <div class="bt-step" id="bts-2">Exit 3R</div>
-        <div class="bt-step" id="bts-3">Trail EMA9</div>
+    <!-- ── SINGLE STOCK PANEL ── -->
+    <div id="bt-single-panel">
+      <div class="card" id="bt-form-card">
+        <div class="card-title">Single Stock Backtest</div>
+
+        <div class="bt-input-row">
+          <label>Stock Ticker (NSE)</label>
+          <input class="bt-input" id="bt-ticker" type="text" placeholder="e.g. RELIANCE" value="RELIANCE"
+                 style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
+        </div>
+        <div class="bt-row2">
+          <div class="bt-input-row">
+            <label>Start Date</label>
+            <input class="bt-input" id="bt-start" type="date" value="2022-01-01">
+          </div>
+          <div class="bt-input-row">
+            <label>End Date</label>
+            <input class="bt-input" id="bt-end" type="date">
+          </div>
+        </div>
+
+        <div class="divider"></div>
+        <div style="font-size:10px;font-weight:700;color:var(--muted);
+          text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px">
+          Override Parameters (optional — leave blank to use current)
+        </div>
+        <div class="bt-row2">
+          <div class="bt-input-row">
+            <label>EMA Proximity (%×)</label>
+            <input class="bt-input" id="bt-ema" type="number" step="0.001" placeholder="use current">
+          </div>
+          <div class="bt-input-row">
+            <label>Max Candle Rng (%×)</label>
+            <input class="bt-input" id="bt-rng" type="number" step="0.001" placeholder="use current">
+          </div>
+        </div>
+        <div class="bt-row2">
+          <div class="bt-input-row">
+            <label>Max SL % (%×)</label>
+            <input class="bt-input" id="bt-sl" type="number" step="0.005" placeholder="use current">
+          </div>
+          <div class="bt-input-row">
+            <label>Initial Capital (₹)</label>
+            <input class="bt-input" id="bt-cap" type="number" step="10000" placeholder="100000">
+          </div>
+        </div>
+
+        <div class="bt-tg-row">
+          <div>
+            <div class="bt-tg-label">Send to Telegram</div>
+            <div class="bt-tg-sub">Summary + CSV after backtest</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="bt-tg-toggle"><span class="slider"></span></label>
+        </div>
+        <button class="btn btn-blue" id="bt-run-btn" onclick="runBacktest()" style="margin-top:6px">
+          ▶ Run Backtest — All 3 Exits
+        </button>
       </div>
-      <div class="bt-status" id="bt-status-txt">Initialising…</div>
-    </div>
 
-    <!-- Results -->
-    <div id="bt-results" style="display:none">
+      <!-- Single progress -->
+      <div class="card" id="bt-prog-card" style="display:none">
+        <div class="card-title">Running Backtest…</div>
+        <div class="bt-steps">
+          <div class="bt-step" id="bts-0">Fetch Data</div>
+          <div class="bt-step" id="bts-1">Exit 2R</div>
+          <div class="bt-step" id="bts-2">Exit 3R</div>
+          <div class="bt-step" id="bts-3">Trail EMA9</div>
+        </div>
+        <div class="bt-status" id="bt-status-txt">Initialising…</div>
+      </div>
 
-      <div class="card">
-        <div class="card-title" id="bt-res-title">Results</div>
-
-        <!-- Comparison table -->
-        <div style="overflow-x:auto">
-          <table class="cmp-table" id="cmp-table">
-            <thead>
-              <tr>
+      <!-- Single results -->
+      <div id="bt-results" style="display:none">
+        <div class="card">
+          <div class="card-title" id="bt-res-title">Results</div>
+          <div style="overflow-x:auto">
+            <table class="cmp-table">
+              <thead><tr>
                 <th style="text-align:left">Exit</th>
-                <th>Trades</th>
-                <th>Win%</th>
-                <th>Return%</th>
-                <th>PF</th>
-                <th>MaxDD%</th>
-              </tr>
-            </thead>
-            <tbody id="cmp-body"></tbody>
-          </table>
+                <th>Trades</th><th>Win%</th><th>Return%</th><th>PF</th><th>MaxDD%</th>
+              </tr></thead>
+              <tbody id="cmp-body"></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="mode-tabs">
+          <div class="mode-tab active" id="mt-2R"   onclick="selectMode('2R')">Exit 2R</div>
+          <div class="mode-tab"        id="mt-3R"   onclick="selectMode('3R')">Exit 3R</div>
+          <div class="mode-tab"        id="mt-EMA9" onclick="selectMode('EMA9')">Trail EMA9</div>
+        </div>
+        <div class="metric-grid" id="detail-metrics"></div>
+        <div class="streak-row" style="margin-bottom:12px">
+          <div class="streak-box win"><div class="sv" id="streak-win">—</div><div class="sl">Max Win Streak</div></div>
+          <div class="streak-box loss"><div class="sv" id="streak-loss">—</div><div class="sl">Max Loss Streak</div></div>
+        </div>
+      </div>
+    </div><!-- /single panel -->
+
+    <!-- ── FULL SCAN PANEL ── -->
+    <div id="bt-full-panel" style="display:none">
+      <div class="card">
+        <div class="card-title">Full F&amp;O Scan Backtest</div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:14px;line-height:1.6">
+          Backtests all ~175 F&amp;O stocks. Takes 5–10 min.
+          Shows top 10 leaderboard per exit + combined portfolio return.
+        </div>
+        <div class="bt-row2">
+          <div class="bt-input-row">
+            <label>Start Date</label>
+            <input class="bt-input" id="fbt-start" type="date" value="2022-01-01">
+          </div>
+          <div class="bt-input-row">
+            <label>End Date</label>
+            <input class="bt-input" id="fbt-end" type="date">
+          </div>
+        </div>
+        <div class="bt-row2">
+          <div class="bt-input-row">
+            <label>EMA Proximity (%×)</label>
+            <input class="bt-input" id="fbt-ema" type="number" step="0.001" placeholder="use current">
+          </div>
+          <div class="bt-input-row">
+            <label>Max Candle Rng (%×)</label>
+            <input class="bt-input" id="fbt-rng" type="number" step="0.001" placeholder="use current">
+          </div>
+        </div>
+        <div class="bt-row2">
+          <div class="bt-input-row">
+            <label>Max SL % (%×)</label>
+            <input class="bt-input" id="fbt-sl" type="number" step="0.005" placeholder="use current">
+          </div>
+          <div class="bt-input-row">
+            <label>Initial Capital (₹)</label>
+            <input class="bt-input" id="fbt-cap" type="number" step="10000" placeholder="100000">
+          </div>
+        </div>
+        <div class="bt-tg-row">
+          <div>
+            <div class="bt-tg-label">Send to Telegram</div>
+            <div class="bt-tg-sub">Leaderboard summary after scan</div>
+          </div>
+          <label class="toggle"><input type="checkbox" id="fbt-tg-toggle"><span class="slider"></span></label>
+        </div>
+        <button class="btn btn-blue" id="fbt-run-btn" onclick="runFullBacktest()" style="margin-top:6px">
+          ▶ Run Full Scan Backtest (~175 stocks)
+        </button>
+      </div>
+
+      <!-- Full scan progress -->
+      <div class="card" id="fbt-prog-card" style="display:none">
+        <div class="card-title">Scanning All F&amp;O Stocks…</div>
+        <div class="prog-bg"><div class="prog-fill" id="fbt-prog-bar" style="width:0%"></div></div>
+        <div class="prog-row" style="margin-top:5px">
+          <span id="fbt-prog-cnt">0 / 175</span>
+          <span id="fbt-prog-pct">0%</span>
+        </div>
+        <div class="prog-ticker" id="fbt-prog-tick">Starting…</div>
+        <div style="font-size:11px;color:var(--muted);margin-top:8px">
+          ⏱ Estimated time: 5–10 minutes
         </div>
       </div>
 
-      <!-- Mode selector -->
-      <div class="mode-tabs">
-        <div class="mode-tab active" id="mt-2R" onclick="selectMode('2R')">Exit 2R</div>
-        <div class="mode-tab"        id="mt-3R" onclick="selectMode('3R')">Exit 3R</div>
-        <div class="mode-tab"        id="mt-EMA9" onclick="selectMode('EMA9')">Trail EMA9</div>
-      </div>
+      <!-- Full scan results -->
+      <div id="fbt-results" style="display:none">
 
-      <!-- Detail metrics -->
-      <div class="metric-grid" id="detail-metrics"></div>
+        <!-- Combined portfolio summary -->
+        <div class="card">
+          <div class="card-title" id="fbt-res-title">Combined Portfolio</div>
+          <div style="font-size:11px;color:var(--muted);margin-bottom:10px" id="fbt-res-sub"></div>
 
-      <!-- Streaks -->
-      <div class="streak-row" id="streak-row" style="margin-bottom:12px">
-        <div class="streak-box win">
-          <div class="sv" id="streak-win">—</div>
-          <div class="sl">Max Win Streak</div>
+          <!-- Exit mode tabs -->
+          <div class="mode-tabs" style="margin-bottom:12px">
+            <div class="mode-tab active" id="fmt-2R"   onclick="selectFbtMode('2R')">Exit 2R</div>
+            <div class="mode-tab"        id="fmt-3R"   onclick="selectFbtMode('3R')">Exit 3R</div>
+            <div class="mode-tab"        id="fmt-EMA9" onclick="selectFbtMode('EMA9')">Trail EMA9</div>
+          </div>
+
+          <div class="metric-grid" id="fbt-detail-metrics"></div>
+          <div class="streak-row" style="margin-bottom:0">
+            <div class="streak-box win"><div class="sv" id="fbt-streak-win">—</div><div class="sl">Max Win Streak</div></div>
+            <div class="streak-box loss"><div class="sv" id="fbt-streak-loss">—</div><div class="sl">Max Loss Streak</div></div>
+          </div>
         </div>
-        <div class="streak-box loss">
-          <div class="sv" id="streak-loss">—</div>
-          <div class="sl">Max Loss Streak</div>
-        </div>
-      </div>
 
-    </div><!-- /bt-results -->
+        <!-- Leaderboard -->
+        <div class="card">
+          <div class="card-title">🏆 Top 10 Leaderboard</div>
+          <div class="mode-tabs" style="margin-bottom:12px">
+            <div class="mode-tab active" id="lmt-2R"   onclick="selectLeaderMode('2R')">Exit 2R</div>
+            <div class="mode-tab"        id="lmt-3R"   onclick="selectLeaderMode('3R')">Exit 3R</div>
+            <div class="mode-tab"        id="lmt-EMA9" onclick="selectLeaderMode('EMA9')">Trail EMA9</div>
+          </div>
+          <div id="leaderboard-list"></div>
+        </div>
+
+      </div><!-- /fbt-results -->
+    </div><!-- /full panel -->
 
   </div><!-- /backtest -->
 
@@ -948,6 +1053,133 @@ function toast(msg){
   el.textContent=msg; el.classList.add('show');
   clearTimeout(toastT); toastT=setTimeout(()=>el.classList.remove('show'),2600);
 }
+
+// ── Full Scan Backtest ────────────────────────
+async function runFullBacktest(){
+  const start  = document.getElementById('fbt-start').value||'2022-01-01';
+  const end    = document.getElementById('fbt-end').value;
+  const sendTg = document.getElementById('fbt-tg-toggle').checked;
+  const payload = {start_date:start, end_date:end, send_telegram:sendTg};
+  ['ema','rng','sl','cap'].forEach(k=>{
+    const v=document.getElementById('fbt-'+k).value;
+    if(v){const map={ema:'ema_proximity',rng:'max_candle_rng',sl:'max_sl_pct',cap:'initial_cash'};
+      payload[map[k]]=parseFloat(v);}
+  });
+  const r=await(await fetch('/api/backtest/full/run',{
+    method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)
+  })).json();
+  if(!r.ok){ toast(r.msg||'Error'); return; }
+  document.getElementById('fbt-results').style.display='none';
+  document.getElementById('fbt-prog-card').style.display='block';
+  document.getElementById('fbt-run-btn').disabled=true;
+  toast('Full scan started — sit back ☕');
+  fbtPollTimer=setInterval(pollFbtProgress,2000);
+}
+
+async function pollFbtProgress(){
+  try{
+    const d=await(await fetch('/api/backtest/full/progress')).json();
+    document.getElementById('fbt-prog-bar').style.width=d.pct+'%';
+    document.getElementById('fbt-prog-cnt').textContent=d.progress+' / '+d.total;
+    document.getElementById('fbt-prog-pct').textContent=d.pct+'%';
+    document.getElementById('fbt-prog-tick').textContent=
+      d.running?('Processing: '+d.current):'✅ Done';
+    if(d.error){
+      clearInterval(fbtPollTimer); fbtPollTimer=null;
+      document.getElementById('fbt-prog-card').style.display='none';
+      document.getElementById('fbt-run-btn').disabled=false;
+      toast('❌ '+d.error); return;
+    }
+    if(!d.running && d.progress>0){
+      clearInterval(fbtPollTimer); fbtPollTimer=null;
+      await new Promise(r=>setTimeout(r,500));
+      document.getElementById('fbt-prog-card').style.display='none';
+      document.getElementById('fbt-run-btn').disabled=false;
+      await loadFbtResults();
+    }
+  }catch(e){}
+}
+
+async function loadFbtResults(){
+  const d=await(await fetch('/api/backtest/full/result')).json();
+  if(!d||!d.leaderboard) return;
+  fbtData=d;
+  document.getElementById('fbt-res-sub').textContent=
+    `${d.stocks_with_trades} of ${d.total_stocks} stocks had trades  ·  ${d.start} → ${d.end}`;
+  selectFbtMode('2R');
+  selectLeaderMode('2R');
+  document.getElementById('fbt-results').style.display='block';
+  document.getElementById('fbt-results').scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+function selectFbtMode(mode){
+  activeFbtMode=mode;
+  ['2R','3R','EMA9'].forEach(m=>document.getElementById('fmt-'+m).classList.toggle('active',m===mode));
+  if(!fbtData) return;
+  const mt=fbtData.combined[mode]?.metrics;
+  if(!mt) return;
+  renderMetricGrid('fbt-detail-metrics','fbt-streak-win','fbt-streak-loss',mt);
+}
+
+function selectLeaderMode(mode){
+  activeLeaderMode=mode;
+  ['2R','3R','EMA9'].forEach(m=>document.getElementById('lmt-'+m).classList.toggle('active',m===mode));
+  if(!fbtData) return;
+  const rows=fbtData.leaderboard[mode]||[];
+  const el=document.getElementById('leaderboard-list');
+  if(!rows.length){ el.innerHTML='<div style="color:var(--muted);font-size:13px;padding:10px 0">No data</div>'; return; }
+  el.innerHTML=rows.map((r,i)=>`
+    <div class="lb-row">
+      <div class="lb-rank${i<3?' top3':''}">${i===0?'🥇':i===1?'🥈':i===2?'🥉':(i+1)}</div>
+      <div class="lb-ticker">${r.ticker}</div>
+      <div class="lb-ret">${r.return_pct}%</div>
+      <div class="lb-wr">${r.win_rate}%W</div>
+      <div class="lb-pf">${r.profit_factor??'∞'}PF</div>
+      <div class="lb-dd">${r.max_dd}%DD</div>
+    </div>`).join('');
+}
+
+function renderMetricGrid(metricsId, wsId, lsId, mt){
+  const pf=mt.profit_factor??'∞';
+  const cap='₹'+Number(mt.final_cap).toLocaleString('en-IN');
+  const retC=mt.return_pct>=0?'var(--green)':'var(--red)';
+  const pnlC=(mt.total_pnl||0)>=0?'var(--green)':'var(--red)';
+  document.getElementById(metricsId).innerHTML=`
+    <div class="metric-box"><div class="mv" style="color:${retC}">${mt.return_pct}%</div><div class="ml">Total Return</div></div>
+    <div class="metric-box"><div class="mv" style="color:var(--accent)">${mt.win_rate}%</div><div class="ml">Win Rate</div></div>
+    <div class="metric-box"><div class="mv">${cap}</div><div class="ml">Final Capital</div></div>
+    <div class="metric-box"><div class="mv" style="color:${pnlC}">₹${Number(mt.total_pnl||0).toLocaleString('en-IN')}</div><div class="ml">Net P&L</div></div>
+    <div class="metric-box"><div class="mv">${pf}</div><div class="ml">Profit Factor</div></div>
+    <div class="metric-box"><div class="mv" style="color:var(--red)">${mt.max_dd}%</div><div class="ml">Max Drawdown</div></div>
+    <div class="metric-box"><div class="mv">${mt.trades}</div><div class="ml">Total Trades</div></div>
+    <div class="metric-box"><div class="mv">₹${Number(mt.avg_win||0).toLocaleString('en-IN')}</div><div class="ml">Avg Win</div></div>`;
+  if(wsId) document.getElementById(wsId).textContent = mt.max_win_streak;
+  if(lsId) document.getElementById(lsId).textContent = mt.max_loss_streak;
+}
+
+// ── patch switchBtMode + initFullBacktest + selectMode to use renderMetricGrid ──
+function switchBtMode(mode){
+  activeBtView=mode;
+  document.getElementById('bm-single').classList.toggle('active',mode==='single');
+  document.getElementById('bm-full').classList.toggle('active',  mode==='full');
+  document.getElementById('bt-single-panel').style.display=mode==='single'?'block':'none';
+  document.getElementById('bt-full-panel').style.display  =mode==='full'  ?'block':'none';
+  if(mode==='full') initFullBacktest();
+}
+
+function initFullBacktest(){
+  const ist=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
+  if(!document.getElementById('fbt-end').value)
+    document.getElementById('fbt-end').value=ist.toISOString().slice(0,10);
+  fetch('/api/settings').then(r=>r.json()).then(d=>{
+    const p=d.params;
+    document.getElementById('fbt-ema').placeholder=`current: ${p.ema_proximity}`;
+    document.getElementById('fbt-rng').placeholder=`current: ${p.max_candle_rng}`;
+    document.getElementById('fbt-sl').placeholder =`current: ${p.max_sl_pct}`;
+    document.getElementById('fbt-cap').placeholder=`current: ${p.initial_cash}`;
+  });
+}
+
 </script>
 </body>
 </html>
