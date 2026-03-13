@@ -289,58 +289,63 @@ def _bg_scan(manual=False):
 # ══════════════════════════════════════════════════════════════════
 
 def _bt_prepare(ticker, start_date, end_date, p):
+    import logging
+    logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
     warmup = (pd.Timestamp(start_date) - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
+    print(f"[BT] {ticker}: warmup={warmup} end={end_date}", flush=True)
 
-    df = None
-    attempts = [
-        dict(start=warmup, end=end_date, interval="1d", auto_adjust=True,  progress=False),
-        dict(start=warmup, end=end_date, interval="1d", auto_adjust=False, progress=False),
-        dict(start=warmup,               interval="1d", auto_adjust=True,  progress=False),
-    ]
-    for attempt_num, kwargs in enumerate(attempts):
+    raw = None
+    last_err = ""
+
+    # Attempt 1: standard download
+    try:
+        raw = yf.download(ticker, start=warmup, end=end_date,
+                          interval="1d", auto_adjust=True, progress=False)
+        print(f"[BT] {ticker}: attempt1 rows={len(raw) if raw is not None else 'None'} "
+              f"cols={list(raw.columns) if raw is not None and not raw.empty else '[]'}", flush=True)
+    except Exception as e:
+        last_err = str(e)
+        print(f"[BT] {ticker}: attempt1 exception: {e}", flush=True)
+        if any(x in last_err.lower() for x in ["delisted","no timezone","tzmissing","yftzmissing"]):
+            print(f"[BT] {ticker}: delisted/no-tz — skipping", flush=True)
+            return None
+        time.sleep(1.0)
+
+    # Attempt 2: auto_adjust=False if first attempt empty
+    if raw is None or raw.empty or len(raw) < 10:
         try:
-            # Suppress yfinance console noise
-            import logging
-            logging.getLogger("yfinance").setLevel(logging.CRITICAL)
-
-            raw = yf.download(ticker, **kwargs)
-
-            # Flatten MultiIndex immediately after download
-            if raw is not None and isinstance(raw.columns, pd.MultiIndex):
-                raw.columns = [c[0] for c in raw.columns]
-
-            if raw is not None and not raw.empty and len(raw) >= 10:
-                df = raw; break
-
-            if attempt_num < len(attempts) - 1:
-                time.sleep(0.5)
-
+            time.sleep(0.5)
+            raw = yf.download(ticker, start=warmup, end=end_date,
+                              interval="1d", auto_adjust=False, progress=False)
+            print(f"[BT] {ticker}: attempt2 rows={len(raw) if raw is not None else 'None'}", flush=True)
         except Exception as e:
-            err_str = str(e).lower()
-            # Skip delisted / no-timezone tickers immediately — no point retrying
-            if any(x in err_str for x in ["delisted", "no timezone", "tzmissing",
-                                           "yftzmissing", "no price data"]):
-                return None
-            if attempt_num < len(attempts) - 1:
-                time.sleep(1.0)
-            continue
+            last_err = str(e)
+            print(f"[BT] {ticker}: attempt2 exception: {e}", flush=True)
 
-    if df is None or df.empty or len(df) < 10:
+    if raw is None or raw.empty or len(raw) < 10:
+        print(f"[BT] {ticker}: all attempts returned no data. last_err={last_err!r}", flush=True)
         return None
 
-    # Flatten columns if not already done
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [c[0] for c in df.columns]
+    # Flatten MultiIndex columns (yfinance >= 0.2 returns MultiIndex)
+    print(f"[BT] {ticker}: raw cols before flatten: {list(raw.columns)}", flush=True)
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw.columns = [c[0] for c in raw.columns]
     else:
-        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+        raw.columns = [str(c[0]) if isinstance(c, tuple) else str(c) for c in raw.columns]
+    print(f"[BT] {ticker}: cols after flatten: {list(raw.columns)}", flush=True)
 
-    # Keep only OHLCV
-    needed = [c for c in ["Open","High","Low","Close","Volume"] if c in df.columns]
-    if not all(c in df.columns for c in ["Open","High","Low","Close"]):
+    # Keep OHLCV only
+    missing = [c for c in ["Open","High","Low","Close"] if c not in raw.columns]
+    if missing:
+        print(f"[BT] {ticker}: missing columns {missing} — cannot proceed", flush=True)
         return None
-    df = df[needed].copy()
+
+    df = raw[[c for c in ["Open","High","Low","Close","Volume"] if c in raw.columns]].copy()
     df.dropna(subset=["Open","High","Low","Close"], inplace=True)
+
     if len(df) < 10:
+        print(f"[BT] {ticker}: only {len(df)} clean rows after dropna", flush=True)
         return None
 
     df.index = pd.to_datetime(df.index)
@@ -353,6 +358,8 @@ def _bt_prepare(ticker, start_date, end_date, p):
     df["Range3Hi"]   = df["High"].shift(1).rolling(3).max()
     above            = (df["Close"] > df["EMA20"]).astype(int)
     df["Above20_3d"] = above.shift(1).rolling(3).min()
+
+    print(f"[BT] {ticker}: ✅ ready — {len(df)} rows", flush=True)
     return df
 
 
@@ -1003,4 +1010,3 @@ _start_scheduler()
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
-
