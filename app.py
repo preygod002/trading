@@ -280,17 +280,23 @@ def _bt_prepare(ticker, start_date, end_date, p):
     warmup = (pd.Timestamp(start_date) - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
 
     df = None
-    # Try multiple download strategies
-    for kwargs in [
+    # Try multiple download strategies with delay between attempts
+    attempts = [
         dict(start=warmup, end=end_date, interval="1d", auto_adjust=True,  progress=False),
         dict(start=warmup, end=end_date, interval="1d", auto_adjust=False, progress=False),
         dict(start=warmup,               interval="1d", auto_adjust=True,  progress=False),
-    ]:
+    ]
+    for attempt_num, kwargs in enumerate(attempts):
         try:
             raw = yf.download(ticker, **kwargs)
             if raw is not None and not raw.empty and len(raw) >= 10:
                 df = raw; break
-        except Exception:
+            # Empty result — wait before retry
+            if attempt_num < len(attempts) - 1:
+                time.sleep(1.0)
+        except Exception as e:
+            if attempt_num < len(attempts) - 1:
+                time.sleep(1.5)
             continue
 
     if df is None or df.empty or len(df) < 10:
@@ -521,56 +527,72 @@ def run_full_scan_backtest(start_date, end_date, p, send_tg):
     """
     Backtests every F&O ticker independently.
     Returns per-stock leaderboard + combined portfolio equity.
-    Combined portfolio: trades from ALL stocks merged chronologically,
-    sharing a single capital pool (re-sized each trade).
     """
     scan_bt_state.update({
         "running": True, "error": None, "result": None,
         "progress": 0, "total": len(TICKERS), "current": "Starting…",
     })
 
-    stock_results = []   # one row per ticker
-    all_trades    = []   # every trade across all stocks (for combined sim)
+    stock_results = []
+    all_trades    = []
+    failed        = []
+    succeeded     = 0
 
     for idx, ticker in enumerate(TICKERS):
         short = ticker.replace(".NS", "")
-        scan_bt_state.update({"progress": idx + 1, "current": short})
+        scan_bt_state.update({"progress": idx + 1,
+                               "current": f"{short} ({idx+1}/{len(TICKERS)})"})
         try:
             df = _bt_prepare(ticker, start_date, end_date, p)
             if df is None:
-                continue
-            sigs = _bt_signals(df, start_date, p)
-            if not sigs:
+                failed.append(short)
+                time.sleep(0.5)   # back off before next ticker
                 continue
 
+            sigs = _bt_signals(df, start_date, p)
+            if not sigs:
+                time.sleep(0.3)
+                continue
+
+            succeeded += 1
             for mode in ["2R", "3R", "EMA9"]:
                 trades, final_cap = _bt_simulate(sigs, df, mode, p)
                 if not trades:
                     continue
                 m = _bt_metrics(trades, p["initial_cash"], final_cap)
                 stock_results.append({
-                    "ticker":      short,
-                    "exit_mode":   mode,
-                    "trades":      m["trades"],
-                    "win_rate":    m["win_rate"],
-                    "return_pct":  m["return_pct"],
-                    "profit_factor": m["profit_factor"],
-                    "max_dd":      m["max_dd"],
+                    "ticker":          short,
+                    "exit_mode":       mode,
+                    "trades":          m["trades"],
+                    "win_rate":        m["win_rate"],
+                    "return_pct":      m["return_pct"],
+                    "profit_factor":   m["profit_factor"],
+                    "max_dd":          m["max_dd"],
                     "max_win_streak":  m["max_win_streak"],
                     "max_loss_streak": m["max_loss_streak"],
                 })
-                # Tag each trade with ticker for combined sim
                 for t in trades:
                     t2 = dict(t); t2["Ticker"] = short
                     all_trades.append(t2)
 
-        except Exception:
+        except Exception as e:
+            failed.append(f"{short}:{e}")
+            time.sleep(0.5)
             continue
 
-        time.sleep(0.05)   # be gentle with yfinance
+        # Throttle: 0.8s between tickers to avoid yfinance rate limiting
+        time.sleep(0.8)
+
+    print(f"[BT] Full scan done — {succeeded} stocks with data, "
+          f"{len([r for r in stock_results if r['exit_mode']=='2R'])} with trades, "
+          f"{len(failed)} failed")
 
     if not stock_results:
-        scan_bt_state.update({"running": False, "error": "No data returned for any ticker."})
+        # Give a helpful error with how many stocks actually failed
+        msg = (f"No trades found across {len(TICKERS)} stocks. "
+               f"{len(failed)} tickers had no data (yfinance may be throttling). "
+               f"Try a longer date range e.g. 2020-01-01 to today, or wait a few minutes and retry.")
+        scan_bt_state.update({"running": False, "error": msg})
         return
 
     # ── Leaderboard: top 10 per exit mode ─────────────────────────
@@ -916,6 +938,32 @@ def api_full_bt_progress():
 @app.route("/api/backtest/full/result")
 def api_full_bt_result():
     return jsonify(scan_bt_state["result"] or {})
+
+
+@app.route("/api/backtest/test")
+def api_backtest_test():
+    """Quick test — downloads one ticker and returns what happened."""
+    ticker = request.args.get("ticker", "RELIANCE.NS")
+    start  = request.args.get("start",  "2022-01-01")
+    end    = request.args.get("end",    ist_now().strftime("%Y-%m-%d"))
+    try:
+        import traceback
+        df = _bt_prepare(ticker, start, end, params)
+        if df is None:
+            return jsonify({"ok": False, "msg": f"_bt_prepare returned None for {ticker}",
+                            "ticker": ticker, "start": start, "end": end})
+        sigs = _bt_signals(df, start, params)
+        return jsonify({
+            "ok":      True,
+            "ticker":  ticker,
+            "rows":    len(df),
+            "signals": len(sigs),
+            "cols":    list(df.columns),
+            "date_range": [str(df.index[0].date()), str(df.index[-1].date())],
+            "sample_close": round(float(df["Close"].iloc[-1]), 2),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "msg": str(e), "ticker": ticker})
 
 # ══════════════════════════════════════════════════════════════════
 # STARTUP
