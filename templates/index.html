@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="theme-color" content="#0f172a"/>
+<title>Swing Scanner</title>
+<style>
+/* ── Reset & Base ───────────────────────────────────────── */
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{
+  --bg:#0f172a; --card:#1e293b; --card2:#263248;
+  --border:#334155; --text:#f1f5f9; --muted:#94a3b8;
+  --green:#22c55e; --red:#ef4444; --yellow:#f59e0b;
+  --blue:#3b82f6; --purple:#a855f7; --orange:#f97316;
+  --accent:#38bdf8;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  font-size:15px;overscroll-behavior:none}
+
+/* ── Layout ─────────────────────────────────────────────── */
+.app{display:flex;flex-direction:column;height:100vh;max-width:480px;margin:0 auto}
+.topbar{
+  background:var(--card);border-bottom:1px solid var(--border);
+  padding:14px 16px 10px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:space-between}
+.topbar-left h1{font-size:17px;font-weight:700;letter-spacing:.3px}
+.topbar-left .subtitle{font-size:11px;color:var(--muted);margin-top:2px}
+.time-pill{
+  background:var(--card2);border:1px solid var(--border);
+  border-radius:20px;padding:4px 10px;font-size:11px;
+  color:var(--accent);font-weight:600;white-space:nowrap}
+
+.tabs{
+  display:flex;background:var(--card);border-bottom:1px solid var(--border);
+  flex-shrink:0}
+.tab{
+  flex:1;padding:10px 4px;text-align:center;font-size:12px;font-weight:600;
+  color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;
+  transition:.2s;user-select:none}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+
+.content{flex:1;overflow-y:auto;padding:14px 12px;
+  -webkit-overflow-scrolling:touch}
+
+/* ── Cards ──────────────────────────────────────────────── */
+.card{background:var(--card);border:1px solid var(--border);
+  border-radius:14px;padding:14px;margin-bottom:12px}
+.card-title{font-size:11px;font-weight:700;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px}
+
+/* ── Status row ─────────────────────────────────────────── */
+.status-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.stat-box{background:var(--card2);border-radius:10px;padding:10px 12px}
+.stat-box .val{font-size:20px;font-weight:700;line-height:1}
+.stat-box .lbl{font-size:10px;color:var(--muted);margin-top:3px;text-transform:uppercase}
+.stat-box.green .val{color:var(--green)}
+.stat-box.blue  .val{color:var(--accent)}
+.stat-box.yellow .val{color:var(--yellow)}
+.stat-box.purple .val{color:var(--purple)}
+
+/* ── Market status badge ─────────────────────────────────── */
+.market-badge{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600;
+  margin-bottom:12px}
+.market-badge.open{background:rgba(34,197,94,.15);color:var(--green);
+  border:1px solid rgba(34,197,94,.3)}
+.market-badge.closed{background:rgba(239,68,68,.12);color:var(--red);
+  border:1px solid rgba(239,68,68,.25)}
+.dot{width:7px;height:7px;border-radius:50%;background:currentColor;
+  animation:pulse 1.8s ease-in-out infinite}
+.dot.static{animation:none}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+/* ── Buttons ─────────────────────────────────────────────── */
+.btn{
+  width:100%;padding:14px;border-radius:12px;border:none;cursor:pointer;
+  font-size:15px;font-weight:700;transition:.15s;display:flex;
+  align-items:center;justify-content:center;gap:8px;letter-spacing:.2px}
+.btn:active{transform:scale(.97)}
+.btn-start{background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff}
+.btn-stop {background:linear-gradient(135deg,#ef4444,#dc2626);color:#fff}
+.btn-outline{background:transparent;color:var(--accent);
+  border:1px solid var(--border)}
+.btn-sm{padding:8px 14px;font-size:13px;border-radius:8px;width:auto}
+.btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+
+/* ── Progress ───────────────────────────────────────────── */
+.progress-wrap{margin:10px 0}
+.progress-bar-bg{background:var(--card2);border-radius:99px;height:8px;overflow:hidden}
+.progress-bar-fill{
+  height:100%;border-radius:99px;
+  background:linear-gradient(90deg,var(--blue),var(--accent));
+  transition:width .4s ease;min-width:0}
+.progress-label{
+  display:flex;justify-content:space-between;
+  font-size:11px;color:var(--muted);margin-top:5px}
+.ticker-scanning{
+  font-size:12px;color:var(--accent);margin-top:6px;
+  font-weight:600;letter-spacing:.3px}
+
+/* ── Signal card ─────────────────────────────────────────── */
+.signal-card{
+  background:var(--card2);border:1px solid var(--border);
+  border-radius:12px;padding:13px 14px;margin-bottom:10px;
+  border-left:3px solid var(--green)}
+.signal-header{display:flex;justify-content:space-between;align-items:center}
+.signal-ticker{font-size:16px;font-weight:800;color:var(--green)}
+.signal-time{font-size:10px;color:var(--muted)}
+.signal-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px}
+.sig-item{background:rgba(255,255,255,.04);border-radius:8px;padding:7px 9px}
+.sig-item .lbl{font-size:9px;color:var(--muted);text-transform:uppercase;
+  letter-spacing:.5px;margin-bottom:2px}
+.sig-item .val{font-size:13px;font-weight:700}
+.sig-item.entry .val{color:var(--accent)}
+.sig-item.sl    .val{color:var(--red)}
+.sig-item.t2r   .val{color:var(--yellow)}
+.sig-item.t3r   .val{color:var(--green)}
+.sig-item.risk  .val{color:var(--orange)}
+
+/* ── History card ───────────────────────────────────────── */
+.hist-day{
+  background:var(--card2);border-radius:12px;
+  margin-bottom:10px;overflow:hidden;border:1px solid var(--border)}
+.hist-header{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:11px 14px;cursor:pointer;user-select:none}
+.hist-header:active{background:rgba(255,255,255,.04)}
+.hist-date{font-size:14px;font-weight:700}
+.hist-badge{
+  background:var(--green);color:#000;font-size:11px;font-weight:700;
+  padding:3px 10px;border-radius:20px}
+.hist-badge.zero{background:var(--border);color:var(--muted)}
+.hist-body{padding:0 14px 12px;display:none}
+.hist-body.open{display:block}
+.hist-row{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:13px}
+.hist-row:last-child{border-bottom:none}
+.hist-ticker{font-weight:700;color:var(--green);width:90px}
+.hist-entry{color:var(--accent)}
+.hist-sl{color:var(--red)}
+.hist-2r{color:var(--yellow)}
+
+/* ── Scan log ───────────────────────────────────────────── */
+.log-row{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:9px 12px;border-bottom:1px solid rgba(255,255,255,.05);
+  font-size:12px}
+.log-row:last-child{border-bottom:none}
+.log-time{color:var(--muted);width:60px;flex-shrink:0}
+.log-info{flex:1;padding:0 8px}
+.log-type{font-size:10px;padding:1px 7px;border-radius:10px;flex-shrink:0}
+.log-type.manual{background:rgba(56,189,248,.15);color:var(--accent)}
+.log-type.auto{background:rgba(168,85,247,.15);color:var(--purple)}
+.log-signals{font-weight:700;color:var(--green)}
+.log-signals.zero{color:var(--muted)}
+
+/* ── Schedule toggle ─────────────────────────────────────── */
+.toggle-row{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:4px 0}
+.toggle-label{font-size:13px}
+.toggle{position:relative;width:46px;height:26px;flex-shrink:0}
+.toggle input{opacity:0;width:0;height:0}
+.slider{
+  position:absolute;inset:0;background:var(--border);
+  border-radius:26px;cursor:pointer;transition:.3s}
+.slider:before{
+  content:"";position:absolute;height:20px;width:20px;
+  left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s}
+input:checked + .slider{background:var(--green)}
+input:checked + .slider:before{transform:translateX(20px)}
+
+/* ── Empty state ─────────────────────────────────────────── */
+.empty{text-align:center;padding:40px 20px;color:var(--muted)}
+.empty .icon{font-size:38px;margin-bottom:10px}
+.empty .msg{font-size:14px}
+
+/* ── Toast ───────────────────────────────────────────────── */
+.toast{
+  position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);
+  background:var(--card2);border:1px solid var(--border);
+  border-radius:12px;padding:10px 20px;font-size:13px;font-weight:600;
+  transition:.3s;z-index:999;white-space:nowrap;pointer-events:none}
+.toast.show{transform:translateX(-50%) translateY(0)}
+
+/* ── Scrollbar ───────────────────────────────────────────── */
+::-webkit-scrollbar{width:0}
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Top bar -->
+  <div class="topbar">
+    <div class="topbar-left">
+      <h1>📡 Swing Scanner</h1>
+      <div class="subtitle">NSE F&amp;O · 20 EMA Strategy</div>
+    </div>
+    <div class="time-pill" id="clock">--:--:--</div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('scan')">⚡ Scan</div>
+    <div class="tab" onclick="switchTab('today')">🚨 Today</div>
+    <div class="tab" onclick="switchTab('history')">📅 History</div>
+    <div class="tab" onclick="switchTab('log')">📋 Log</div>
+  </div>
+
+  <!-- ═══════════ TAB: SCAN ═══════════ -->
+  <div class="content" id="tab-scan">
+
+    <!-- Market status -->
+    <div id="market-badge" class="market-badge closed">
+      <span class="dot static" id="market-dot"></span>
+      <span id="market-text">Market Closed</span>
+    </div>
+
+    <!-- Stats grid -->
+    <div class="status-grid" style="margin-bottom:12px">
+      <div class="stat-box blue">
+        <div class="val" id="stat-stocks">175</div>
+        <div class="lbl">Stocks watched</div>
+      </div>
+      <div class="stat-box green">
+        <div class="val" id="stat-signals">0</div>
+        <div class="lbl">Signals today</div>
+      </div>
+      <div class="stat-box yellow">
+        <div class="val" id="stat-next">--:--</div>
+        <div class="lbl">Next auto scan</div>
+      </div>
+      <div class="stat-box purple">
+        <div class="val" id="stat-scannum">#0</div>
+        <div class="lbl">Scans run today</div>
+      </div>
+    </div>
+
+    <!-- Scan control card -->
+    <div class="card">
+      <div class="card-title">Scan Control</div>
+
+      <!-- Auto schedule toggle -->
+      <div class="toggle-row" style="margin-bottom:14px">
+        <div>
+          <div class="toggle-label">Auto Schedule (9:20–15:15 IST)</div>
+          <div style="font-size:11px;color:var(--muted);margin-top:2px">
+            Runs every 15 min during market hours
+          </div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="auto-toggle" checked onchange="toggleSchedule()">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <!-- Start/Stop button -->
+      <button class="btn btn-start" id="scan-btn" onclick="handleScanBtn()">
+        <span id="scan-btn-icon">▶</span>
+        <span id="scan-btn-text">Run Manual Scan</span>
+      </button>
+
+      <!-- Progress (hidden until scan starts) -->
+      <div id="progress-section" style="display:none;margin-top:14px">
+        <div class="progress-wrap">
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="prog-bar" style="width:0%"></div>
+          </div>
+          <div class="progress-label">
+            <span id="prog-text">0 / 175</span>
+            <span id="prog-pct">0%</span>
+          </div>
+        </div>
+        <div class="ticker-scanning" id="prog-ticker">Scanning...</div>
+      </div>
+    </div>
+
+    <!-- Last scan info -->
+    <div class="card" id="last-scan-card" style="display:none">
+      <div class="card-title">Last Scan</div>
+      <div style="font-size:13px;color:var(--muted)" id="last-scan-info"></div>
+    </div>
+
+  </div><!-- /tab-scan -->
+
+  <!-- ═══════════ TAB: TODAY ═══════════ -->
+  <div class="content" id="tab-today" style="display:none">
+    <div class="card-title" style="padding:4px 2px 10px" id="today-header">
+      Today's Signals
+    </div>
+    <div id="today-list"></div>
+  </div>
+
+  <!-- ═══════════ TAB: HISTORY ═══════════ -->
+  <div class="content" id="tab-history" style="display:none">
+    <div class="card-title" style="padding:4px 2px 10px">Past Signals</div>
+    <div id="history-list"></div>
+  </div>
+
+  <!-- ═══════════ TAB: LOG ═══════════ -->
+  <div class="content" id="tab-log" style="display:none">
+    <div class="card-title" style="padding:4px 2px 10px">Scan Log</div>
+    <div class="card" style="padding:0;overflow:hidden">
+      <div id="log-list"></div>
+    </div>
+  </div>
+
+</div><!-- /app -->
+
+<div class="toast" id="toast"></div>
+
+<script>
+// ══════════════════════════════════════════════
+// STATE
+// ══════════════════════════════════════════════
+let activeTab      = 'scan';
+let scanRunning    = false;
+let autoSchedule   = true;
+let progressTimer  = null;
+let statusTimer    = null;
+
+// ══════════════════════════════════════════════
+// CLOCK
+// ══════════════════════════════════════════════
+function updateClock(){
+  const now = new Date();
+  const ist = new Date(now.toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
+  document.getElementById('clock').textContent =
+    ist.toTimeString().slice(0,8);
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ══════════════════════════════════════════════
+// TABS
+// ══════════════════════════════════════════════
+function switchTab(name){
+  activeTab = name;
+  document.querySelectorAll('.tab').forEach((t,i)=>{
+    const tabs = ['scan','today','history','log'];
+    t.classList.toggle('active', tabs[i]===name);
+  });
+  ['scan','today','history','log'].forEach(id=>{
+    document.getElementById('tab-'+id).style.display = id===name?'block':'none';
+  });
+  if(name==='today')   loadToday();
+  if(name==='history') loadHistory();
+  if(name==='log')     loadLog();
+}
+
+// ══════════════════════════════════════════════
+// STATUS POLLING
+// ══════════════════════════════════════════════
+async function pollStatus(){
+  try{
+    const r = await fetch('/api/status');
+    const d = await r.json();
+
+    // Market badge
+    const badge = document.getElementById('market-badge');
+    const dot   = document.getElementById('market-dot');
+    const mtext = document.getElementById('market-text');
+    if(d.market_open){
+      badge.className='market-badge open';
+      dot.className='dot';
+      mtext.textContent='Market Open';
+    } else {
+      badge.className='market-badge closed';
+      dot.className='dot static';
+      mtext.textContent='Market Closed';
+    }
+
+    document.getElementById('stat-stocks').textContent  = d.total_tickers || 175;
+    document.getElementById('stat-signals').textContent = d.signals_count || 0;
+    document.getElementById('stat-next').textContent    = d.next_scan_time || '--:--';
+    document.getElementById('stat-scannum').textContent = '#'+(d.scan_number||0);
+
+    // Sync auto toggle
+    autoSchedule = d.auto_schedule !== false;
+    document.getElementById('auto-toggle').checked = autoSchedule;
+
+    // Last scan
+    if(d.last_scan_time){
+      document.getElementById('last-scan-card').style.display='block';
+      document.getElementById('last-scan-info').textContent =
+        `Last scan at ${d.last_scan_time}`;
+    }
+
+    // Button sync
+    if(d.scan_running !== scanRunning){
+      scanRunning = d.scan_running;
+      updateScanBtn();
+      if(scanRunning) startProgressPoll();
+      else            stopProgressPoll();
+    }
+
+  }catch(e){}
+}
+setInterval(pollStatus, 3000);
+pollStatus();
+
+// ══════════════════════════════════════════════
+// PROGRESS
+// ══════════════════════════════════════════════
+async function pollProgress(){
+  try{
+    const r = await fetch('/api/scan/progress');
+    const d = await r.json();
+
+    document.getElementById('progress-section').style.display = 'block';
+    document.getElementById('prog-bar').style.width   = d.pct+'%';
+    document.getElementById('prog-text').textContent  = `${d.scanned} / ${d.total}`;
+    document.getElementById('prog-pct').textContent   = d.pct+'%';
+    document.getElementById('prog-ticker').textContent =
+      d.running ? `Scanning: ${d.current_ticker}` : '✅ Scan complete';
+
+    if(!d.running){
+      scanRunning = false;
+      updateScanBtn();
+      stopProgressPoll();
+      // Refresh today tab if open
+      if(activeTab==='today') loadToday();
+      pollStatus();
+    }
+  }catch(e){}
+}
+
+function startProgressPoll(){
+  if(progressTimer) return;
+  progressTimer = setInterval(pollProgress, 800);
+}
+function stopProgressPoll(){
+  clearInterval(progressTimer);
+  progressTimer = null;
+}
+
+// ══════════════════════════════════════════════
+// SCAN BUTTON
+// ══════════════════════════════════════════════
+function updateScanBtn(){
+  const btn  = document.getElementById('scan-btn');
+  const icon = document.getElementById('scan-btn-icon');
+  const text = document.getElementById('scan-btn-text');
+  if(scanRunning){
+    btn.className  = 'btn btn-stop';
+    icon.textContent = '⏹';
+    text.textContent = 'Stop Scan';
+  } else {
+    btn.className  = 'btn btn-start';
+    icon.textContent = '▶';
+    text.textContent = 'Run Manual Scan';
+    document.getElementById('progress-section').style.display = 'none';
+  }
+}
+
+async function handleScanBtn(){
+  if(scanRunning){
+    // Stop
+    await fetch('/api/scan/stop',{method:'POST'});
+    toast('Stop requested…');
+  } else {
+    // Start
+    const r = await fetch('/api/scan/start',{method:'POST'});
+    const d = await r.json();
+    if(d.ok){
+      scanRunning = true;
+      updateScanBtn();
+      startProgressPoll();
+      toast('Scan started 🚀');
+    } else {
+      toast(d.msg || 'Could not start scan');
+    }
+  }
+}
+
+// ══════════════════════════════════════════════
+// AUTO SCHEDULE TOGGLE
+// ══════════════════════════════════════════════
+async function toggleSchedule(){
+  const r = await fetch('/api/schedule/toggle',{method:'POST'});
+  const d = await r.json();
+  autoSchedule = d.auto_schedule;
+  toast(autoSchedule ? 'Auto schedule ON' : 'Auto schedule OFF');
+}
+
+// ══════════════════════════════════════════════
+// TODAY'S SIGNALS
+// ══════════════════════════════════════════════
+async function loadToday(){
+  const r = await fetch('/api/signals/today');
+  const d = await r.json();
+  const el = document.getElementById('today-list');
+  document.getElementById('today-header').textContent =
+    `Today's Signals — ${d.date}`;
+
+  if(!d.signals || d.signals.length===0){
+    el.innerHTML = `<div class="empty">
+      <div class="icon">📭</div>
+      <div class="msg">No signals yet today.<br>Run a scan or wait for auto scan.</div>
+    </div>`;
+    return;
+  }
+
+  el.innerHTML = d.signals.map(s=>`
+    <div class="signal-card">
+      <div class="signal-header">
+        <div class="signal-ticker">${s.ticker}</div>
+        <div class="signal-time">${s.timestamp.slice(11,16)}</div>
+      </div>
+      <div class="signal-grid">
+        <div class="sig-item entry">
+          <div class="lbl">Entry (Range3Hi)</div>
+          <div class="val">₹${s.entry}</div>
+        </div>
+        <div class="sig-item sl">
+          <div class="lbl">Stop Loss</div>
+          <div class="val">₹${s.stop_loss}</div>
+        </div>
+        <div class="sig-item t2r">
+          <div class="lbl">Target 2R</div>
+          <div class="val">₹${s.target_2r}</div>
+        </div>
+        <div class="sig-item t3r">
+          <div class="lbl">Target 3R</div>
+          <div class="val">₹${s.target_3r}</div>
+        </div>
+        <div class="sig-item risk">
+          <div class="lbl">SL Risk</div>
+          <div class="val">${s.sl_pct}%</div>
+        </div>
+        <div class="sig-item">
+          <div class="lbl">Live Price</div>
+          <div class="val">₹${s.live_price}</div>
+        </div>
+      </div>
+      <div style="font-size:10px;color:var(--muted);margin-top:8px">
+        EMA9: ${s.ema9} &nbsp;|&nbsp; EMA20: ${s.ema20}
+        &nbsp;|&nbsp; BE → ₹${s.entry} at 1R
+      </div>
+    </div>
+  `).join('');
+}
+
+// ══════════════════════════════════════════════
+// HISTORY
+// ══════════════════════════════════════════════
+async function loadHistory(){
+  const r  = await fetch('/api/signals/history');
+  const days = await r.json();
+  const el = document.getElementById('history-list');
+
+  if(!days || days.length===0){
+    el.innerHTML=`<div class="empty">
+      <div class="icon">📂</div>
+      <div class="msg">No historical data yet.</div>
+    </div>`;
+    return;
+  }
+
+  el.innerHTML = days.map((day,idx)=>`
+    <div class="hist-day">
+      <div class="hist-header" onclick="toggleHistDay(${idx})">
+        <div class="hist-date">${fmtDate(day.date)}</div>
+        <div class="hist-badge${day.count===0?' zero':''}">
+          ${day.count===0 ? 'No signals' : day.count+' signal'+(day.count>1?'s':'')}
+        </div>
+      </div>
+      <div class="hist-body" id="hist-body-${idx}">
+        ${day.signals.length===0
+          ? '<div style="color:var(--muted);font-size:13px;padding-top:4px">No signals this day.</div>'
+          : day.signals.map(s=>`
+            <div class="hist-row">
+              <div class="hist-ticker">${s.ticker}</div>
+              <div class="hist-entry">₹${s.entry}</div>
+              <div class="hist-sl">₹${s.stop_loss}</div>
+              <div class="hist-2r">₹${s.target_2r}</div>
+            </div>`).join('')
+        }
+      </div>
+    </div>
+  `).join('');
+}
+
+function toggleHistDay(idx){
+  const el = document.getElementById('hist-body-'+idx);
+  el.classList.toggle('open');
+}
+
+function fmtDate(str){
+  try{
+    const d = new Date(str);
+    return d.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});
+  }catch{return str}
+}
+
+// ══════════════════════════════════════════════
+// SCAN LOG
+// ══════════════════════════════════════════════
+async function loadLog(){
+  const r    = await fetch('/api/scan/log');
+  const logs = await r.json();
+  const el   = document.getElementById('log-list');
+
+  if(!logs || logs.length===0){
+    el.innerHTML=`<div class="empty" style="padding:30px">
+      <div class="icon">📋</div>
+      <div class="msg">No scans run yet.</div>
+    </div>`;
+    return;
+  }
+
+  el.innerHTML = logs.map(l=>`
+    <div class="log-row">
+      <div class="log-time">${l.time||'--'}</div>
+      <div class="log-info">
+        <div>${l.date||''} &nbsp;·&nbsp; ${l.total_stocks||0} stocks
+          &nbsp;·&nbsp; ${l.elapsed_sec||0}s</div>
+        ${l.tickers_found&&l.tickers_found.length>0
+          ? `<div style="color:var(--green);font-size:11px;margin-top:2px">
+               ${l.tickers_found.join(', ')}</div>`
+          : ''}
+      </div>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+        <span class="log-type ${l.type}">${l.type||'auto'}</span>
+        <span class="log-signals${(l.signals_found||0)===0?' zero':''}">
+          ${l.signals_found||0} sig
+        </span>
+      </div>
+    </div>
+  `).join('');
+}
+
+// ══════════════════════════════════════════════
+// TOAST
+// ══════════════════════════════════════════════
+let toastTimer;
+function toast(msg){
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(()=>el.classList.remove('show'), 2500);
+}
+</script>
+</body>
+</html>
