@@ -34,6 +34,11 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 IST = ZoneInfo("Asia/Kolkata")
 
+# Silence yfinance noise (delisted warnings, rate limit messages)
+import logging as _logging
+_logging.getLogger("yfinance").setLevel(_logging.CRITICAL)
+_logging.getLogger("peewee").setLevel(_logging.CRITICAL)
+
 # ══════════════════════════════════════════════════════════════════
 # LIVE-EDITABLE STRATEGY PARAMETERS
 # ══════════════════════════════════════════════════════════════════
@@ -66,8 +71,7 @@ TICKERS = [
     "BRITANNIA.NS","BSOFT.NS","CANBK.NS","CANFINHOME.NS","CDSL.NS",
     "CESC.NS","CHOLAFIN.NS","CIPLA.NS","COALINDIA.NS","COFORGE.NS",
     "COLPAL.NS","CONCOR.NS","COROMANDEL.NS","CROMPTON.NS","CUB.NS",
-    "CUMMINSIND.NS","DABUR.NS","DALBHARAT.NS","DEEPAKNTR.NS","DELTACORP.NS",
-    "DIVISLAB.NS","DIXON.NS","DLF.NS","DRREDDY.NS","EICHERMOT.NS",
+    "CUMMINSIND.NS","DABUR.NS","DALBHARAT.NS","DEEPAKNTR.NS","DIVISLAB.NS","DIXON.NS","DLF.NS","DRREDDY.NS","EICHERMOT.NS",
     "ESCORTS.NS","EXIDEIND.NS","FEDERALBNK.NS","GAIL.NS",
     "GLENMARK.NS","GMRINFRA.NS","GNFC.NS","GODREJCP.NS","GODREJPROP.NS",
     "GRANULES.NS","GRASIM.NS","GUJGASLTD.NS","HAL.NS","HAVELLS.NS",
@@ -85,11 +89,10 @@ TICKERS = [
     "NATIONALUM.NS","NAVINFLUOR.NS","NESTLEIND.NS",
     "NMDC.NS","NTPC.NS","OBEROIRLTY.NS","OFSS.NS","ONGC.NS","PAGEIND.NS",
     "PERSISTENT.NS","PETRONET.NS","PFC.NS","PIIND.NS","PNB.NS",
-    "POLYCAB.NS","POWERGRID.NS","PVRINOX.NS","RAMCOCEM.NS",
+    "POLYCAB.NS","POWERGRID.NS","RAMCOCEM.NS",
     "RECLTD.NS","RELIANCE.NS","SAIL.NS","SBICARD.NS","SBILIFE.NS",
     "SBIN.NS","SHREECEM.NS","SHRIRAMFIN.NS","SIEMENS.NS","SRF.NS",
-    "SUNPHARMA.NS","SUNTV.NS","SUPREMEIND.NS","SYNGENE.NS","TATACOMM.NS",
-    "TATACONSUM.NS","TATAMOTORS.NS","TATAPOWER.NS","TATASTEEL.NS","TCS.NS",
+    "SUNPHARMA.NS","SUNTV.NS","SUPREMEIND.NS","SYNGENE.NS","TATACONSUM.NS","TATAMOTORS.NS","TATAPOWER.NS","TATASTEEL.NS","TCS.NS",
     "TECHM.NS","TITAN.NS","TORNTPHARM.NS","TORNTPOWER.NS","TRENT.NS",
     "TRIDENT.NS","TVSMOTOR.NS","UBL.NS","ULTRACEMCO.NS",
     "UPL.NS","VEDL.NS","VOLTAS.NS","WIPRO.NS",
@@ -159,12 +162,18 @@ def fetch_and_check(ticker):
     if short in state["signals_today"]:
         return None
     try:
+        import logging
+        logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
         hist = yf.download(ticker, period=f"{int(params['lookback_days'])}d",
                            interval="1d", auto_adjust=True, progress=False)
-        if hist.empty or len(hist) < 10:
+        if hist is None or hist.empty or len(hist) < 10:
             return None
         hist.dropna(inplace=True)
-        hist.columns = [c[0] if isinstance(c, tuple) else c for c in hist.columns]
+        if isinstance(hist.columns, pd.MultiIndex):
+            hist.columns = [c[0] for c in hist.columns]
+        else:
+            hist.columns = [c[0] if isinstance(c, tuple) else c for c in hist.columns]
 
         live_raw = yf.download(ticker, period="1d", interval="1m",
                                auto_adjust=True, progress=False)
@@ -223,7 +232,10 @@ def fetch_and_check(ticker):
             "ema9":       round(ema9, 2),
             "ema20":      round(ema20, 2),
         }
-    except Exception:
+    except Exception as e:
+        err = str(e).lower()
+        if any(x in err for x in ["delisted","no timezone","tzmissing","yftzmissing"]):
+            pass  # silently skip delisted tickers
         return None
 
 
@@ -280,7 +292,6 @@ def _bt_prepare(ticker, start_date, end_date, p):
     warmup = (pd.Timestamp(start_date) - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
 
     df = None
-    # Try multiple download strategies with delay between attempts
     attempts = [
         dict(start=warmup, end=end_date, interval="1d", auto_adjust=True,  progress=False),
         dict(start=warmup, end=end_date, interval="1d", auto_adjust=False, progress=False),
@@ -288,21 +299,36 @@ def _bt_prepare(ticker, start_date, end_date, p):
     ]
     for attempt_num, kwargs in enumerate(attempts):
         try:
+            # Suppress yfinance console noise
+            import logging
+            logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
             raw = yf.download(ticker, **kwargs)
+
+            # Flatten MultiIndex immediately after download
+            if raw is not None and isinstance(raw.columns, pd.MultiIndex):
+                raw.columns = [c[0] for c in raw.columns]
+
             if raw is not None and not raw.empty and len(raw) >= 10:
                 df = raw; break
-            # Empty result — wait before retry
+
+            if attempt_num < len(attempts) - 1:
+                time.sleep(0.5)
+
+        except Exception as e:
+            err_str = str(e).lower()
+            # Skip delisted / no-timezone tickers immediately — no point retrying
+            if any(x in err_str for x in ["delisted", "no timezone", "tzmissing",
+                                           "yftzmissing", "no price data"]):
+                return None
             if attempt_num < len(attempts) - 1:
                 time.sleep(1.0)
-        except Exception as e:
-            if attempt_num < len(attempts) - 1:
-                time.sleep(1.5)
             continue
 
     if df is None or df.empty or len(df) < 10:
         return None
 
-    # Flatten MultiIndex columns (yfinance >= 0.2.x)
+    # Flatten columns if not already done
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [c[0] for c in df.columns]
     else:
@@ -310,6 +336,8 @@ def _bt_prepare(ticker, start_date, end_date, p):
 
     # Keep only OHLCV
     needed = [c for c in ["Open","High","Low","Close","Volume"] if c in df.columns]
+    if not all(c in df.columns for c in ["Open","High","Low","Close"]):
+        return None
     df = df[needed].copy()
     df.dropna(subset=["Open","High","Low","Close"], inplace=True)
     if len(df) < 10:
