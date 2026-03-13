@@ -7,644 +7,946 @@
 <meta name="theme-color" content="#0f172a"/>
 <title>Swing Scanner</title>
 <style>
-/* ── Reset & Base ───────────────────────────────────────── */
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 :root{
-  --bg:#0f172a; --card:#1e293b; --card2:#263248;
-  --border:#334155; --text:#f1f5f9; --muted:#94a3b8;
-  --green:#22c55e; --red:#ef4444; --yellow:#f59e0b;
-  --blue:#3b82f6; --purple:#a855f7; --orange:#f97316;
-  --accent:#38bdf8;
+  --bg:#0f172a;--card:#1e293b;--card2:#263248;--border:#334155;
+  --text:#f1f5f9;--muted:#94a3b8;--green:#22c55e;--red:#ef4444;
+  --yellow:#f59e0b;--blue:#3b82f6;--purple:#a855f7;--orange:#f97316;
+  --accent:#38bdf8;--teal:#2dd4bf;
 }
 html,body{height:100%;background:var(--bg);color:var(--text);
   font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
   font-size:15px;overscroll-behavior:none}
-
-/* ── Layout ─────────────────────────────────────────────── */
 .app{display:flex;flex-direction:column;height:100vh;max-width:480px;margin:0 auto}
-.topbar{
-  background:var(--card);border-bottom:1px solid var(--border);
-  padding:14px 16px 10px;flex-shrink:0;
-  display:flex;align-items:center;justify-content:space-between}
-.topbar-left h1{font-size:17px;font-weight:700;letter-spacing:.3px}
-.topbar-left .subtitle{font-size:11px;color:var(--muted);margin-top:2px}
-.time-pill{
-  background:var(--card2);border:1px solid var(--border);
-  border-radius:20px;padding:4px 10px;font-size:11px;
-  color:var(--accent);font-weight:600;white-space:nowrap}
 
-.tabs{
-  display:flex;background:var(--card);border-bottom:1px solid var(--border);
-  flex-shrink:0}
-.tab{
-  flex:1;padding:10px 4px;text-align:center;font-size:12px;font-weight:600;
+/* ── Topbar ── */
+.topbar{background:var(--card);border-bottom:1px solid var(--border);
+  padding:13px 16px 9px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:space-between}
+.topbar h1{font-size:17px;font-weight:700}
+.topbar .sub{font-size:11px;color:var(--muted);margin-top:1px}
+.time-pill{background:var(--card2);border:1px solid var(--border);
+  border-radius:20px;padding:4px 10px;font-size:11px;color:var(--accent);
+  font-weight:600;white-space:nowrap}
+
+/* ── Tabs ── */
+.tabs{display:flex;background:var(--card);border-bottom:1px solid var(--border);flex-shrink:0}
+.tab{flex:1;padding:9px 2px;text-align:center;font-size:11px;font-weight:700;
   color:var(--muted);cursor:pointer;border-bottom:2px solid transparent;
-  transition:.2s;user-select:none}
+  transition:.2s;user-select:none;letter-spacing:.2px}
 .tab.active{color:var(--accent);border-bottom-color:var(--accent)}
 
-.content{flex:1;overflow-y:auto;padding:14px 12px;
-  -webkit-overflow-scrolling:touch}
+.content{flex:1;overflow-y:auto;padding:13px 12px;-webkit-overflow-scrolling:touch}
 
-/* ── Cards ──────────────────────────────────────────────── */
-.card{background:var(--card);border:1px solid var(--border);
-  border-radius:14px;padding:14px;margin-bottom:12px}
-.card-title{font-size:11px;font-weight:700;color:var(--muted);
-  text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px}
+/* ── Cards ── */
+.card{background:var(--card);border:1px solid var(--border);border-radius:14px;
+  padding:14px;margin-bottom:12px}
+.card-title{font-size:10px;font-weight:700;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.9px;margin-bottom:10px}
 
-/* ── Status row ─────────────────────────────────────────── */
-.status-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+/* ── Stats grid ── */
+.stat-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
 .stat-box{background:var(--card2);border-radius:10px;padding:10px 12px}
-.stat-box .val{font-size:20px;font-weight:700;line-height:1}
-.stat-box .lbl{font-size:10px;color:var(--muted);margin-top:3px;text-transform:uppercase}
-.stat-box.green .val{color:var(--green)}
-.stat-box.blue  .val{color:var(--accent)}
-.stat-box.yellow .val{color:var(--yellow)}
-.stat-box.purple .val{color:var(--purple)}
+.stat-box .v{font-size:20px;font-weight:700;line-height:1}
+.stat-box .l{font-size:10px;color:var(--muted);margin-top:3px;text-transform:uppercase}
+.c-blue .v{color:var(--accent)} .c-green .v{color:var(--green)}
+.c-yellow .v{color:var(--yellow)} .c-purple .v{color:var(--purple)}
 
-/* ── Market status badge ─────────────────────────────────── */
-.market-badge{
-  display:inline-flex;align-items:center;gap:6px;
-  padding:5px 12px;border-radius:20px;font-size:12px;font-weight:600;
-  margin-bottom:12px}
-.market-badge.open{background:rgba(34,197,94,.15);color:var(--green);
+/* ── Market badge ── */
+.mbadge{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;
+  border-radius:20px;font-size:12px;font-weight:600;margin-bottom:12px}
+.mbadge.open{background:rgba(34,197,94,.15);color:var(--green);
   border:1px solid rgba(34,197,94,.3)}
-.market-badge.closed{background:rgba(239,68,68,.12);color:var(--red);
+.mbadge.closed{background:rgba(239,68,68,.12);color:var(--red);
   border:1px solid rgba(239,68,68,.25)}
 .dot{width:7px;height:7px;border-radius:50%;background:currentColor;
   animation:pulse 1.8s ease-in-out infinite}
-.dot.static{animation:none}
+.dot.s{animation:none}
 @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 
-/* ── Buttons ─────────────────────────────────────────────── */
-.btn{
-  width:100%;padding:14px;border-radius:12px;border:none;cursor:pointer;
-  font-size:15px;font-weight:700;transition:.15s;display:flex;
-  align-items:center;justify-content:center;gap:8px;letter-spacing:.2px}
+/* ── Buttons ── */
+.btn{width:100%;padding:13px;border-radius:12px;border:none;cursor:pointer;
+  font-size:14px;font-weight:700;transition:.15s;display:flex;
+  align-items:center;justify-content:center;gap:7px}
 .btn:active{transform:scale(.97)}
 .btn-start{background:linear-gradient(135deg,#22c55e,#16a34a);color:#fff}
-.btn-stop {background:linear-gradient(135deg,#ef4444,#dc2626);color:#fff}
-.btn-outline{background:transparent;color:var(--accent);
-  border:1px solid var(--border)}
-.btn-sm{padding:8px 14px;font-size:13px;border-radius:8px;width:auto}
-.btn:disabled{opacity:.45;cursor:not-allowed;transform:none}
+.btn-stop{background:linear-gradient(135deg,#ef4444,#dc2626);color:#fff}
+.btn-blue{background:linear-gradient(135deg,#3b82f6,#2563eb);color:#fff}
+.btn-outline{background:transparent;color:var(--accent);border:1px solid var(--border)}
+.btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.btn-sm{padding:9px 16px;font-size:12px;border-radius:9px;width:auto}
 
-/* ── Progress ───────────────────────────────────────────── */
-.progress-wrap{margin:10px 0}
-.progress-bar-bg{background:var(--card2);border-radius:99px;height:8px;overflow:hidden}
-.progress-bar-fill{
-  height:100%;border-radius:99px;
-  background:linear-gradient(90deg,var(--blue),var(--accent));
-  transition:width .4s ease;min-width:0}
-.progress-label{
-  display:flex;justify-content:space-between;
-  font-size:11px;color:var(--muted);margin-top:5px}
-.ticker-scanning{
-  font-size:12px;color:var(--accent);margin-top:6px;
-  font-weight:600;letter-spacing:.3px}
+/* ── Progress ── */
+.prog-bg{background:var(--card2);border-radius:99px;height:8px;overflow:hidden;margin:10px 0 4px}
+.prog-fill{height:100%;border-radius:99px;
+  background:linear-gradient(90deg,var(--blue),var(--accent));transition:width .4s}
+.prog-row{display:flex;justify-content:space-between;font-size:11px;color:var(--muted)}
+.prog-ticker{font-size:12px;color:var(--accent);font-weight:600;margin-top:5px}
 
-/* ── Signal card ─────────────────────────────────────────── */
-.signal-card{
-  background:var(--card2);border:1px solid var(--border);
-  border-radius:12px;padding:13px 14px;margin-bottom:10px;
-  border-left:3px solid var(--green)}
-.signal-header{display:flex;justify-content:space-between;align-items:center}
-.signal-ticker{font-size:16px;font-weight:800;color:var(--green)}
-.signal-time{font-size:10px;color:var(--muted)}
-.signal-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px}
-.sig-item{background:rgba(255,255,255,.04);border-radius:8px;padding:7px 9px}
-.sig-item .lbl{font-size:9px;color:var(--muted);text-transform:uppercase;
-  letter-spacing:.5px;margin-bottom:2px}
-.sig-item .val{font-size:13px;font-weight:700}
-.sig-item.entry .val{color:var(--accent)}
-.sig-item.sl    .val{color:var(--red)}
-.sig-item.t2r   .val{color:var(--yellow)}
-.sig-item.t3r   .val{color:var(--green)}
-.sig-item.risk  .val{color:var(--orange)}
-
-/* ── History card ───────────────────────────────────────── */
-.hist-day{
-  background:var(--card2);border-radius:12px;
-  margin-bottom:10px;overflow:hidden;border:1px solid var(--border)}
-.hist-header{
-  display:flex;justify-content:space-between;align-items:center;
-  padding:11px 14px;cursor:pointer;user-select:none}
-.hist-header:active{background:rgba(255,255,255,.04)}
-.hist-date{font-size:14px;font-weight:700}
-.hist-badge{
-  background:var(--green);color:#000;font-size:11px;font-weight:700;
-  padding:3px 10px;border-radius:20px}
-.hist-badge.zero{background:var(--border);color:var(--muted)}
-.hist-body{padding:0 14px 12px;display:none}
-.hist-body.open{display:block}
-.hist-row{
-  display:flex;justify-content:space-between;align-items:center;
-  padding:7px 0;border-bottom:1px solid rgba(255,255,255,.05);font-size:13px}
-.hist-row:last-child{border-bottom:none}
-.hist-ticker{font-weight:700;color:var(--green);width:90px}
-.hist-entry{color:var(--accent)}
-.hist-sl{color:var(--red)}
-.hist-2r{color:var(--yellow)}
-
-/* ── Scan log ───────────────────────────────────────────── */
-.log-row{
-  display:flex;justify-content:space-between;align-items:center;
-  padding:9px 12px;border-bottom:1px solid rgba(255,255,255,.05);
-  font-size:12px}
-.log-row:last-child{border-bottom:none}
-.log-time{color:var(--muted);width:60px;flex-shrink:0}
-.log-info{flex:1;padding:0 8px}
-.log-type{font-size:10px;padding:1px 7px;border-radius:10px;flex-shrink:0}
-.log-type.manual{background:rgba(56,189,248,.15);color:var(--accent)}
-.log-type.auto{background:rgba(168,85,247,.15);color:var(--purple)}
-.log-signals{font-weight:700;color:var(--green)}
-.log-signals.zero{color:var(--muted)}
-
-/* ── Schedule toggle ─────────────────────────────────────── */
-.toggle-row{
-  display:flex;justify-content:space-between;align-items:center;
-  padding:4px 0}
-.toggle-label{font-size:13px}
+/* ── Toggle ── */
+.toggle-row{display:flex;justify-content:space-between;align-items:center;padding:2px 0}
 .toggle{position:relative;width:46px;height:26px;flex-shrink:0}
 .toggle input{opacity:0;width:0;height:0}
-.slider{
-  position:absolute;inset:0;background:var(--border);
-  border-radius:26px;cursor:pointer;transition:.3s}
-.slider:before{
-  content:"";position:absolute;height:20px;width:20px;
-  left:3px;bottom:3px;background:#fff;border-radius:50%;transition:.3s}
-input:checked + .slider{background:var(--green)}
-input:checked + .slider:before{transform:translateX(20px)}
+.slider{position:absolute;inset:0;background:var(--border);border-radius:26px;
+  cursor:pointer;transition:.3s}
+.slider:before{content:"";position:absolute;height:20px;width:20px;left:3px;bottom:3px;
+  background:#fff;border-radius:50%;transition:.3s}
+input:checked+.slider{background:var(--green)}
+input:checked+.slider:before{transform:translateX(20px)}
 
-/* ── Empty state ─────────────────────────────────────────── */
-.empty{text-align:center;padding:40px 20px;color:var(--muted)}
-.empty .icon{font-size:38px;margin-bottom:10px}
-.empty .msg{font-size:14px}
+/* ── Collapsible settings ── */
+.settings-trigger{display:flex;justify-content:space-between;align-items:center;
+  cursor:pointer;user-select:none;padding:4px 0}
+.settings-trigger:active{opacity:.7}
+.settings-arrow{font-size:12px;color:var(--muted);transition:transform .25s}
+.settings-arrow.open{transform:rotate(180deg)}
+.settings-body{display:none;margin-top:12px;padding-top:12px;
+  border-top:1px solid var(--border)}
+.settings-body.open{display:block}
+.param-row{display:flex;justify-content:space-between;align-items:center;
+  margin-bottom:12px}
+.param-row:last-child{margin-bottom:0}
+.param-label{font-size:12px;color:var(--text);flex:1}
+.param-hint{font-size:10px;color:var(--muted);margin-top:1px}
+.param-input-wrap{display:flex;align-items:center;gap:6px}
+.param-input{background:var(--card2);border:1px solid var(--border);
+  border-radius:8px;color:var(--text);font-size:13px;font-weight:600;
+  padding:6px 9px;width:80px;text-align:right;outline:none}
+.param-input:focus{border-color:var(--accent)}
+.param-unit{font-size:11px;color:var(--muted);width:20px}
+.param-changed{border-color:var(--yellow) !important}
+.settings-actions{display:flex;gap:8px;margin-top:14px}
+.settings-actions .btn{flex:1}
 
-/* ── Toast ───────────────────────────────────────────────── */
-.toast{
-  position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);
-  background:var(--card2);border:1px solid var(--border);
-  border-radius:12px;padding:10px 20px;font-size:13px;font-weight:600;
-  transition:.3s;z-index:999;white-space:nowrap;pointer-events:none}
+/* ── Signal cards ── */
+.sig-card{background:var(--card2);border:1px solid var(--border);
+  border-radius:12px;padding:13px 14px;margin-bottom:10px;
+  border-left:3px solid var(--green)}
+.sig-hd{display:flex;justify-content:space-between;align-items:center}
+.sig-ticker{font-size:16px;font-weight:800;color:var(--green)}
+.sig-time{font-size:10px;color:var(--muted)}
+.sig-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:10px}
+.si{background:rgba(255,255,255,.04);border-radius:8px;padding:7px 9px}
+.si .l{font-size:9px;color:var(--muted);text-transform:uppercase;
+  letter-spacing:.5px;margin-bottom:2px}
+.si .v{font-size:13px;font-weight:700}
+.si.entry .v{color:var(--accent)} .si.sl .v{color:var(--red)}
+.si.t2r .v{color:var(--yellow)}   .si.t3r .v{color:var(--green)}
+.si.risk .v{color:var(--orange)}
+
+/* ── History ── */
+.hist-day{background:var(--card2);border-radius:12px;margin-bottom:10px;
+  overflow:hidden;border:1px solid var(--border)}
+.hist-hd{display:flex;justify-content:space-between;align-items:center;
+  padding:11px 14px;cursor:pointer;user-select:none}
+.hist-hd:active{background:rgba(255,255,255,.04)}
+.hist-date{font-size:14px;font-weight:700}
+.hist-badge{background:var(--green);color:#000;font-size:11px;font-weight:700;
+  padding:3px 10px;border-radius:20px}
+.hist-badge.z{background:var(--border);color:var(--muted)}
+.hist-body{padding:0 14px 12px;display:none}
+.hist-body.open{display:block}
+.hist-row{display:flex;justify-content:space-between;padding:7px 0;
+  border-bottom:1px solid rgba(255,255,255,.05);font-size:13px}
+.hist-row:last-child{border-bottom:none}
+
+/* ── Log ── */
+.log-row{display:flex;justify-content:space-between;align-items:center;
+  padding:9px 12px;border-bottom:1px solid rgba(255,255,255,.05);font-size:12px}
+.log-row:last-child{border-bottom:none}
+.log-time{color:var(--muted);width:58px;flex-shrink:0}
+.log-type{font-size:10px;padding:2px 7px;border-radius:10px;flex-shrink:0}
+.log-type.manual{background:rgba(56,189,248,.15);color:var(--accent)}
+.log-type.auto{background:rgba(168,85,247,.15);color:var(--purple)}
+.log-sigs{font-weight:700;color:var(--green)}
+.log-sigs.z{color:var(--muted)}
+
+/* ── Backtest ── */
+.bt-input-row{margin-bottom:11px}
+.bt-input-row label{font-size:11px;color:var(--muted);text-transform:uppercase;
+  letter-spacing:.6px;display:block;margin-bottom:5px}
+.bt-input{width:100%;background:var(--card2);border:1px solid var(--border);
+  color:var(--text);font-size:14px;padding:10px 12px;border-radius:10px;outline:none}
+.bt-input:focus{border-color:var(--accent)}
+.bt-row2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.bt-tg-row{display:flex;justify-content:space-between;align-items:center;
+  padding:10px 0;border-top:1px solid var(--border);margin-top:4px}
+.bt-tg-label{font-size:13px}
+.bt-tg-sub{font-size:10px;color:var(--muted);margin-top:1px}
+
+/* ── BT Progress ── */
+.bt-prog-wrap{margin-top:12px}
+.bt-steps{display:flex;gap:6px;margin-bottom:8px}
+.bt-step{flex:1;background:var(--card2);border-radius:6px;padding:6px 4px;
+  font-size:10px;text-align:center;color:var(--muted);border:1px solid var(--border)}
+.bt-step.done{background:rgba(34,197,94,.15);color:var(--green);
+  border-color:rgba(34,197,94,.3)}
+.bt-step.active{background:rgba(56,189,248,.15);color:var(--accent);
+  border-color:var(--accent)}
+.bt-status{font-size:12px;color:var(--accent);text-align:center;margin-top:6px}
+
+/* ── BT Results ── */
+.cmp-table{width:100%;border-collapse:collapse;font-size:12px;margin-top:4px}
+.cmp-table th{background:var(--card2);color:var(--muted);padding:8px 6px;
+  text-align:center;font-size:10px;text-transform:uppercase;letter-spacing:.5px;
+  border-bottom:1px solid var(--border)}
+.cmp-table td{padding:9px 6px;text-align:center;border-bottom:1px solid rgba(255,255,255,.05)}
+.cmp-table tr:last-child td{border-bottom:none}
+.cmp-table .mode-lbl{font-weight:700;color:var(--text);text-align:left}
+.best-cell{color:var(--green);font-weight:700}
+.worst-cell{color:var(--red)}
+
+.metric-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px}
+.metric-box{background:var(--card2);border-radius:10px;padding:10px 12px;
+  border:1px solid var(--border)}
+.metric-box .mv{font-size:17px;font-weight:700}
+.metric-box .ml{font-size:9px;color:var(--muted);text-transform:uppercase;
+  letter-spacing:.6px;margin-top:3px}
+.mode-tabs{display:flex;gap:6px;margin-bottom:12px}
+.mode-tab{flex:1;padding:8px 4px;border-radius:9px;border:1px solid var(--border);
+  text-align:center;font-size:12px;font-weight:700;cursor:pointer;color:var(--muted);
+  background:var(--card2);transition:.2s}
+.mode-tab.active{background:rgba(56,189,248,.15);color:var(--accent);
+  border-color:var(--accent)}
+.streak-row{display:flex;gap:8px;margin-top:0}
+.streak-box{flex:1;background:var(--card2);border-radius:10px;padding:10px 12px;
+  border:1px solid var(--border);text-align:center}
+.streak-box .sv{font-size:22px;font-weight:800}
+.streak-box .sl{font-size:10px;color:var(--muted);text-transform:uppercase;
+  letter-spacing:.5px;margin-top:2px}
+.streak-box.win .sv{color:var(--green)}
+.streak-box.loss .sv{color:var(--red)}
+
+/* ── Empty ── */
+.empty{text-align:center;padding:36px 20px;color:var(--muted)}
+.empty .icon{font-size:36px;margin-bottom:10px}
+.empty .msg{font-size:13px;line-height:1.5}
+
+/* ── Toast ── */
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(80px);
+  background:var(--card2);border:1px solid var(--border);border-radius:12px;
+  padding:10px 20px;font-size:13px;font-weight:600;transition:.3s;z-index:999;
+  white-space:nowrap;pointer-events:none}
 .toast.show{transform:translateX(-50%) translateY(0)}
 
-/* ── Scrollbar ───────────────────────────────────────────── */
+/* ── Divider ── */
+.divider{height:1px;background:var(--border);margin:12px 0}
 ::-webkit-scrollbar{width:0}
 </style>
 </head>
 <body>
 <div class="app">
 
-  <!-- Top bar -->
+  <!-- Topbar -->
   <div class="topbar">
-    <div class="topbar-left">
+    <div>
       <h1>📡 Swing Scanner</h1>
-      <div class="subtitle">NSE F&amp;O · 20 EMA Strategy</div>
+      <div class="sub">NSE F&amp;O · 20 EMA Strategy</div>
     </div>
     <div class="time-pill" id="clock">--:--:--</div>
   </div>
 
   <!-- Tabs -->
   <div class="tabs">
-    <div class="tab active" onclick="switchTab('scan')">⚡ Scan</div>
-    <div class="tab" onclick="switchTab('today')">🚨 Today</div>
-    <div class="tab" onclick="switchTab('history')">📅 History</div>
-    <div class="tab" onclick="switchTab('log')">📋 Log</div>
+    <div class="tab active"  onclick="switchTab('scan')">⚡ Scan</div>
+    <div class="tab"         onclick="switchTab('today')">🚨 Today</div>
+    <div class="tab"         onclick="switchTab('history')">📅 History</div>
+    <div class="tab"         onclick="switchTab('backtest')">🔬 Backtest</div>
+    <div class="tab"         onclick="switchTab('log')">📋 Log</div>
   </div>
 
-  <!-- ═══════════ TAB: SCAN ═══════════ -->
+  <!-- ═══ TAB: SCAN ═══ -->
   <div class="content" id="tab-scan">
 
-    <!-- Market status -->
-    <div id="market-badge" class="market-badge closed">
-      <span class="dot static" id="market-dot"></span>
-      <span id="market-text">Market Closed</span>
+    <div id="mbadge" class="mbadge closed">
+      <span class="dot s" id="mdot"></span>
+      <span id="mtext">Market Closed</span>
     </div>
 
-    <!-- Stats grid -->
-    <div class="status-grid" style="margin-bottom:12px">
-      <div class="stat-box blue">
-        <div class="val" id="stat-stocks">175</div>
-        <div class="lbl">Stocks watched</div>
-      </div>
-      <div class="stat-box green">
-        <div class="val" id="stat-signals">0</div>
-        <div class="lbl">Signals today</div>
-      </div>
-      <div class="stat-box yellow">
-        <div class="val" id="stat-next">--:--</div>
-        <div class="lbl">Next auto scan</div>
-      </div>
-      <div class="stat-box purple">
-        <div class="val" id="stat-scannum">#0</div>
-        <div class="lbl">Scans run today</div>
-      </div>
+    <div class="stat-grid">
+      <div class="stat-box c-blue"><div class="v" id="s-stocks">175</div><div class="l">Stocks</div></div>
+      <div class="stat-box c-green"><div class="v" id="s-sigs">0</div><div class="l">Signals Today</div></div>
+      <div class="stat-box c-yellow"><div class="v" id="s-next">--:--</div><div class="l">Next Auto Scan</div></div>
+      <div class="stat-box c-purple"><div class="v" id="s-num">#0</div><div class="l">Scans Run</div></div>
     </div>
 
-    <!-- Scan control card -->
+    <!-- Scan control -->
     <div class="card">
       <div class="card-title">Scan Control</div>
-
-      <!-- Auto schedule toggle -->
       <div class="toggle-row" style="margin-bottom:14px">
         <div>
-          <div class="toggle-label">Auto Schedule (9:20–15:15 IST)</div>
-          <div style="font-size:11px;color:var(--muted);margin-top:2px">
-            Runs every 15 min during market hours
-          </div>
+          <div style="font-size:13px">Auto Schedule (9:20–15:15 IST)</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:2px">Every 15 min during market hours</div>
         </div>
         <label class="toggle">
           <input type="checkbox" id="auto-toggle" checked onchange="toggleSchedule()">
           <span class="slider"></span>
         </label>
       </div>
-
-      <!-- Start/Stop button -->
       <button class="btn btn-start" id="scan-btn" onclick="handleScanBtn()">
-        <span id="scan-btn-icon">▶</span>
-        <span id="scan-btn-text">Run Manual Scan</span>
+        <span id="btn-icon">▶</span><span id="btn-text">Run Manual Scan</span>
       </button>
-
-      <!-- Progress (hidden until scan starts) -->
-      <div id="progress-section" style="display:none;margin-top:14px">
-        <div class="progress-wrap">
-          <div class="progress-bar-bg">
-            <div class="progress-bar-fill" id="prog-bar" style="width:0%"></div>
-          </div>
-          <div class="progress-label">
-            <span id="prog-text">0 / 175</span>
-            <span id="prog-pct">0%</span>
-          </div>
+      <div id="prog-wrap" style="display:none;margin-top:14px">
+        <div class="prog-bg"><div class="prog-fill" id="prog-bar" style="width:0%"></div></div>
+        <div class="prog-row">
+          <span id="prog-cnt">0 / 175</span><span id="prog-pct">0%</span>
         </div>
-        <div class="ticker-scanning" id="prog-ticker">Scanning...</div>
+        <div class="prog-ticker" id="prog-tick">Scanning…</div>
       </div>
     </div>
 
-    <!-- Last scan info -->
-    <div class="card" id="last-scan-card" style="display:none">
-      <div class="card-title">Last Scan</div>
-      <div style="font-size:13px;color:var(--muted)" id="last-scan-info"></div>
+    <!-- Settings collapsible -->
+    <div class="card">
+      <div class="settings-trigger" onclick="toggleSettings()">
+        <div>
+          <div class="card-title" style="margin-bottom:0">⚙️ Strategy Parameters</div>
+          <div style="font-size:10px;color:var(--muted);margin-top:3px" id="params-summary">
+            EMA 0.5% · Rng 1.0% · SL 5.0%
+          </div>
+        </div>
+        <span class="settings-arrow" id="settings-arrow">▼</span>
+      </div>
+      <div class="settings-body" id="settings-body">
+
+        <div class="param-row">
+          <div><div class="param-label">EMA Proximity</div>
+            <div class="param-hint">How close candle low must be to EMA20</div></div>
+          <div class="param-input-wrap">
+            <input class="param-input" id="p-ema" type="number" step="0.001" min="0.001" max="0.05" value="0.005" oninput="markChanged(this)">
+            <span class="param-unit">%×</span>
+          </div>
+        </div>
+
+        <div class="param-row">
+          <div><div class="param-label">Max Candle Range</div>
+            <div class="param-hint">Max H-L range of each of previous 3 candles</div></div>
+          <div class="param-input-wrap">
+            <input class="param-input" id="p-rng" type="number" step="0.001" min="0.001" max="0.05" value="0.010" oninput="markChanged(this)">
+            <span class="param-unit">%×</span>
+          </div>
+        </div>
+
+        <div class="param-row">
+          <div><div class="param-label">Max SL %</div>
+            <div class="param-hint">Skip trade if stop loss is wider than this</div></div>
+          <div class="param-input-wrap">
+            <input class="param-input" id="p-sl" type="number" step="0.005" min="0.01" max="0.15" value="0.050" oninput="markChanged(this)">
+            <span class="param-unit">%×</span>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="param-row" style="margin-bottom:0">
+          <div><div class="param-label">Lookback Days</div>
+            <div class="param-hint">History fetched for live scan</div></div>
+          <div class="param-input-wrap">
+            <input class="param-input" id="p-lb" type="number" step="1" min="20" max="90" value="30" style="width:70px" oninput="markChanged(this)">
+            <span class="param-unit">d</span>
+          </div>
+        </div>
+
+        <div class="settings-actions">
+          <button class="btn btn-blue btn-sm" onclick="saveSettings()">💾 Save &amp; Apply</button>
+          <button class="btn btn-outline btn-sm" onclick="resetSettings()">↺ Reset</button>
+        </div>
+      </div>
     </div>
 
-  </div><!-- /tab-scan -->
+    <div class="card" id="last-card" style="display:none">
+      <div class="card-title">Last Scan</div>
+      <div style="font-size:13px;color:var(--muted)" id="last-info"></div>
+    </div>
 
-  <!-- ═══════════ TAB: TODAY ═══════════ -->
+  </div><!-- /scan -->
+
+  <!-- ═══ TAB: TODAY ═══ -->
   <div class="content" id="tab-today" style="display:none">
-    <div class="card-title" style="padding:4px 2px 10px" id="today-header">
+    <div style="font-size:13px;font-weight:700;color:var(--muted);
+      text-transform:uppercase;letter-spacing:.7px;padding:4px 2px 10px" id="today-hd">
       Today's Signals
     </div>
     <div id="today-list"></div>
   </div>
 
-  <!-- ═══════════ TAB: HISTORY ═══════════ -->
+  <!-- ═══ TAB: HISTORY ═══ -->
   <div class="content" id="tab-history" style="display:none">
-    <div class="card-title" style="padding:4px 2px 10px">Past Signals</div>
+    <div style="font-size:10px;font-weight:700;color:var(--muted);
+      text-transform:uppercase;letter-spacing:.9px;padding:4px 2px 10px">Past Signals</div>
     <div id="history-list"></div>
   </div>
 
-  <!-- ═══════════ TAB: LOG ═══════════ -->
+  <!-- ═══ TAB: BACKTEST ═══ -->
+  <div class="content" id="tab-backtest" style="display:none">
+
+    <!-- Input form -->
+    <div class="card" id="bt-form-card">
+      <div class="card-title">🔬 Backtest Setup</div>
+
+      <div class="bt-input-row">
+        <label>Stock Ticker (NSE)</label>
+        <input class="bt-input" id="bt-ticker" type="text" placeholder="e.g. RELIANCE" value="RELIANCE"
+               style="text-transform:uppercase" oninput="this.value=this.value.toUpperCase()">
+      </div>
+
+      <div class="bt-row2">
+        <div class="bt-input-row">
+          <label>Start Date</label>
+          <input class="bt-input" id="bt-start" type="date" value="2022-01-01">
+        </div>
+        <div class="bt-input-row">
+          <label>End Date</label>
+          <input class="bt-input" id="bt-end" type="date">
+        </div>
+      </div>
+
+      <div class="divider"></div>
+      <div style="font-size:10px;font-weight:700;color:var(--muted);
+        text-transform:uppercase;letter-spacing:.8px;margin-bottom:10px">
+        Override Parameters (optional)
+      </div>
+
+      <div class="bt-row2">
+        <div class="bt-input-row">
+          <label>EMA Proximity (%×)</label>
+          <input class="bt-input" id="bt-ema" type="number" step="0.001" placeholder="use current">
+        </div>
+        <div class="bt-input-row">
+          <label>Max Candle Rng (%×)</label>
+          <input class="bt-input" id="bt-rng" type="number" step="0.001" placeholder="use current">
+        </div>
+      </div>
+      <div class="bt-row2">
+        <div class="bt-input-row">
+          <label>Max SL % (%×)</label>
+          <input class="bt-input" id="bt-sl" type="number" step="0.005" placeholder="use current">
+        </div>
+        <div class="bt-input-row">
+          <label>Initial Capital (₹)</label>
+          <input class="bt-input" id="bt-cap" type="number" step="10000" placeholder="100000">
+        </div>
+      </div>
+
+      <div class="bt-tg-row">
+        <div>
+          <div class="bt-tg-label">Send CSV to Telegram</div>
+          <div class="bt-tg-sub">Sends summary + trade CSV after backtest</div>
+        </div>
+        <label class="toggle">
+          <input type="checkbox" id="bt-tg-toggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+
+      <button class="btn btn-blue" id="bt-run-btn" onclick="runBacktest()" style="margin-top:6px">
+        ▶ Run Backtest (All 3 Exits)
+      </button>
+    </div>
+
+    <!-- Progress -->
+    <div class="card" id="bt-prog-card" style="display:none">
+      <div class="card-title">Running Backtest…</div>
+      <div class="bt-steps">
+        <div class="bt-step" id="bts-0">Fetch Data</div>
+        <div class="bt-step" id="bts-1">Exit 2R</div>
+        <div class="bt-step" id="bts-2">Exit 3R</div>
+        <div class="bt-step" id="bts-3">Trail EMA9</div>
+      </div>
+      <div class="bt-status" id="bt-status-txt">Initialising…</div>
+    </div>
+
+    <!-- Results -->
+    <div id="bt-results" style="display:none">
+
+      <div class="card">
+        <div class="card-title" id="bt-res-title">Results</div>
+
+        <!-- Comparison table -->
+        <div style="overflow-x:auto">
+          <table class="cmp-table" id="cmp-table">
+            <thead>
+              <tr>
+                <th style="text-align:left">Exit</th>
+                <th>Trades</th>
+                <th>Win%</th>
+                <th>Return%</th>
+                <th>PF</th>
+                <th>MaxDD%</th>
+              </tr>
+            </thead>
+            <tbody id="cmp-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Mode selector -->
+      <div class="mode-tabs">
+        <div class="mode-tab active" id="mt-2R" onclick="selectMode('2R')">Exit 2R</div>
+        <div class="mode-tab"        id="mt-3R" onclick="selectMode('3R')">Exit 3R</div>
+        <div class="mode-tab"        id="mt-EMA9" onclick="selectMode('EMA9')">Trail EMA9</div>
+      </div>
+
+      <!-- Detail metrics -->
+      <div class="metric-grid" id="detail-metrics"></div>
+
+      <!-- Streaks -->
+      <div class="streak-row" id="streak-row" style="margin-bottom:12px">
+        <div class="streak-box win">
+          <div class="sv" id="streak-win">—</div>
+          <div class="sl">Max Win Streak</div>
+        </div>
+        <div class="streak-box loss">
+          <div class="sv" id="streak-loss">—</div>
+          <div class="sl">Max Loss Streak</div>
+        </div>
+      </div>
+
+    </div><!-- /bt-results -->
+
+  </div><!-- /backtest -->
+
+  <!-- ═══ TAB: LOG ═══ -->
   <div class="content" id="tab-log" style="display:none">
-    <div class="card-title" style="padding:4px 2px 10px">Scan Log</div>
+    <div style="font-size:10px;font-weight:700;color:var(--muted);
+      text-transform:uppercase;letter-spacing:.9px;padding:4px 2px 10px">Scan Log</div>
     <div class="card" style="padding:0;overflow:hidden">
       <div id="log-list"></div>
     </div>
   </div>
 
 </div><!-- /app -->
-
 <div class="toast" id="toast"></div>
 
 <script>
-// ══════════════════════════════════════════════
+// ══════════════════════════════════════
 // STATE
-// ══════════════════════════════════════════════
-let activeTab      = 'scan';
-let scanRunning    = false;
-let autoSchedule   = true;
-let progressTimer  = null;
-let statusTimer    = null;
+// ══════════════════════════════════════
+let activeTab    = 'scan';
+let scanRunning  = false;
+let progTimer    = null;
+let statusTimer  = null;
+let btPollTimer  = null;
+let btData       = null;
+let activeBtMode = '2R';
 
-// ══════════════════════════════════════════════
+// ══════════════════════════════════════
 // CLOCK
-// ══════════════════════════════════════════════
+// ══════════════════════════════════════
 function updateClock(){
-  const now = new Date();
-  const ist = new Date(now.toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
-  document.getElementById('clock').textContent =
-    ist.toTimeString().slice(0,8);
+  const ist = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
+  document.getElementById('clock').textContent = ist.toTimeString().slice(0,8);
 }
-setInterval(updateClock, 1000);
-updateClock();
+setInterval(updateClock,1000); updateClock();
 
-// ══════════════════════════════════════════════
+// ══════════════════════════════════════
 // TABS
-// ══════════════════════════════════════════════
+// ══════════════════════════════════════
+const TABS = ['scan','today','history','backtest','log'];
 function switchTab(name){
   activeTab = name;
-  document.querySelectorAll('.tab').forEach((t,i)=>{
-    const tabs = ['scan','today','history','log'];
-    t.classList.toggle('active', tabs[i]===name);
-  });
-  ['scan','today','history','log'].forEach(id=>{
-    document.getElementById('tab-'+id).style.display = id===name?'block':'none';
-  });
-  if(name==='today')   loadToday();
-  if(name==='history') loadHistory();
-  if(name==='log')     loadLog();
+  document.querySelectorAll('.tab').forEach((t,i)=>
+    t.classList.toggle('active', TABS[i]===name));
+  TABS.forEach(id=>
+    document.getElementById('tab-'+id).style.display = id===name?'block':'none');
+  if(name==='today')    loadToday();
+  if(name==='history')  loadHistory();
+  if(name==='log')      loadLog();
+  if(name==='backtest') initBacktest();
 }
 
-// ══════════════════════════════════════════════
-// STATUS POLLING
-// ══════════════════════════════════════════════
+// ══════════════════════════════════════
+// STATUS POLL
+// ══════════════════════════════════════
 async function pollStatus(){
   try{
-    const r = await fetch('/api/status');
-    const d = await r.json();
-
-    // Market badge
-    const badge = document.getElementById('market-badge');
-    const dot   = document.getElementById('market-dot');
-    const mtext = document.getElementById('market-text');
-    if(d.market_open){
-      badge.className='market-badge open';
-      dot.className='dot';
-      mtext.textContent='Market Open';
-    } else {
-      badge.className='market-badge closed';
-      dot.className='dot static';
-      mtext.textContent='Market Closed';
-    }
-
-    document.getElementById('stat-stocks').textContent  = d.total_tickers || 175;
-    document.getElementById('stat-signals').textContent = d.signals_count || 0;
-    document.getElementById('stat-next').textContent    = d.next_scan_time || '--:--';
-    document.getElementById('stat-scannum').textContent = '#'+(d.scan_number||0);
-
-    // Sync auto toggle
-    autoSchedule = d.auto_schedule !== false;
-    document.getElementById('auto-toggle').checked = autoSchedule;
-
-    // Last scan
+    const d = await (await fetch('/api/status')).json();
+    const open = d.market_open;
+    const badge = document.getElementById('mbadge');
+    const dot   = document.getElementById('mdot');
+    badge.className = 'mbadge '+(open?'open':'closed');
+    dot.className   = 'dot'+(open?'':' s');
+    document.getElementById('mtext').textContent = open?'Market Open':'Market Closed';
+    document.getElementById('s-stocks').textContent = d.total_tickers||175;
+    document.getElementById('s-sigs').textContent   = d.signals_count||0;
+    document.getElementById('s-next').textContent   = d.next_scan_time||'—';
+    document.getElementById('s-num').textContent    = '#'+(d.scan_number||0);
+    document.getElementById('auto-toggle').checked  = d.auto_schedule!==false;
     if(d.last_scan_time){
-      document.getElementById('last-scan-card').style.display='block';
-      document.getElementById('last-scan-info').textContent =
-        `Last scan at ${d.last_scan_time}`;
+      document.getElementById('last-card').style.display='block';
+      document.getElementById('last-info').textContent='Last scan at '+d.last_scan_time+' IST';
     }
-
-    // Button sync
-    if(d.scan_running !== scanRunning){
-      scanRunning = d.scan_running;
-      updateScanBtn();
-      if(scanRunning) startProgressPoll();
-      else            stopProgressPoll();
-    }
-
-  }catch(e){}
-}
-setInterval(pollStatus, 3000);
-pollStatus();
-
-// ══════════════════════════════════════════════
-// PROGRESS
-// ══════════════════════════════════════════════
-async function pollProgress(){
-  try{
-    const r = await fetch('/api/scan/progress');
-    const d = await r.json();
-
-    document.getElementById('progress-section').style.display = 'block';
-    document.getElementById('prog-bar').style.width   = d.pct+'%';
-    document.getElementById('prog-text').textContent  = `${d.scanned} / ${d.total}`;
-    document.getElementById('prog-pct').textContent   = d.pct+'%';
-    document.getElementById('prog-ticker').textContent =
-      d.running ? `Scanning: ${d.current_ticker}` : '✅ Scan complete';
-
-    if(!d.running){
-      scanRunning = false;
-      updateScanBtn();
-      stopProgressPoll();
-      // Refresh today tab if open
-      if(activeTab==='today') loadToday();
-      pollStatus();
+    if(d.scan_running!==scanRunning){
+      scanRunning=d.scan_running; updateScanBtn();
+      if(scanRunning) startProg(); else stopProg();
     }
   }catch(e){}
 }
+setInterval(pollStatus,3000); pollStatus();
 
-function startProgressPoll(){
-  if(progressTimer) return;
-  progressTimer = setInterval(pollProgress, 800);
-}
-function stopProgressPoll(){
-  clearInterval(progressTimer);
-  progressTimer = null;
-}
-
-// ══════════════════════════════════════════════
-// SCAN BUTTON
-// ══════════════════════════════════════════════
+// ══════════════════════════════════════
+// SCAN BUTTON + PROGRESS
+// ══════════════════════════════════════
 function updateScanBtn(){
-  const btn  = document.getElementById('scan-btn');
-  const icon = document.getElementById('scan-btn-icon');
-  const text = document.getElementById('scan-btn-text');
-  if(scanRunning){
-    btn.className  = 'btn btn-stop';
-    icon.textContent = '⏹';
-    text.textContent = 'Stop Scan';
-  } else {
-    btn.className  = 'btn btn-start';
-    icon.textContent = '▶';
-    text.textContent = 'Run Manual Scan';
-    document.getElementById('progress-section').style.display = 'none';
-  }
+  const btn=document.getElementById('scan-btn');
+  document.getElementById('btn-icon').textContent = scanRunning?'⏹':'▶';
+  document.getElementById('btn-text').textContent = scanRunning?'Stop Scan':'Run Manual Scan';
+  btn.className='btn '+(scanRunning?'btn-stop':'btn-start');
+  if(!scanRunning) document.getElementById('prog-wrap').style.display='none';
 }
 
 async function handleScanBtn(){
   if(scanRunning){
-    // Stop
     await fetch('/api/scan/stop',{method:'POST'});
     toast('Stop requested…');
   } else {
-    // Start
-    const r = await fetch('/api/scan/start',{method:'POST'});
-    const d = await r.json();
-    if(d.ok){
-      scanRunning = true;
-      updateScanBtn();
-      startProgressPoll();
-      toast('Scan started 🚀');
-    } else {
-      toast(d.msg || 'Could not start scan');
-    }
+    const r=await (await fetch('/api/scan/start',{method:'POST'})).json();
+    if(r.ok){ scanRunning=true; updateScanBtn(); startProg(); toast('Scan started 🚀'); }
+    else toast(r.msg||'Error');
   }
 }
 
-// ══════════════════════════════════════════════
-// AUTO SCHEDULE TOGGLE
-// ══════════════════════════════════════════════
-async function toggleSchedule(){
-  const r = await fetch('/api/schedule/toggle',{method:'POST'});
-  const d = await r.json();
-  autoSchedule = d.auto_schedule;
-  toast(autoSchedule ? 'Auto schedule ON' : 'Auto schedule OFF');
-}
-
-// ══════════════════════════════════════════════
-// TODAY'S SIGNALS
-// ══════════════════════════════════════════════
-async function loadToday(){
-  const r = await fetch('/api/signals/today');
-  const d = await r.json();
-  const el = document.getElementById('today-list');
-  document.getElementById('today-header').textContent =
-    `Today's Signals — ${d.date}`;
-
-  if(!d.signals || d.signals.length===0){
-    el.innerHTML = `<div class="empty">
-      <div class="icon">📭</div>
-      <div class="msg">No signals yet today.<br>Run a scan or wait for auto scan.</div>
-    </div>`;
-    return;
-  }
-
-  el.innerHTML = d.signals.map(s=>`
-    <div class="signal-card">
-      <div class="signal-header">
-        <div class="signal-ticker">${s.ticker}</div>
-        <div class="signal-time">${s.timestamp.slice(11,16)}</div>
-      </div>
-      <div class="signal-grid">
-        <div class="sig-item entry">
-          <div class="lbl">Entry (Range3Hi)</div>
-          <div class="val">₹${s.entry}</div>
-        </div>
-        <div class="sig-item sl">
-          <div class="lbl">Stop Loss</div>
-          <div class="val">₹${s.stop_loss}</div>
-        </div>
-        <div class="sig-item t2r">
-          <div class="lbl">Target 2R</div>
-          <div class="val">₹${s.target_2r}</div>
-        </div>
-        <div class="sig-item t3r">
-          <div class="lbl">Target 3R</div>
-          <div class="val">₹${s.target_3r}</div>
-        </div>
-        <div class="sig-item risk">
-          <div class="lbl">SL Risk</div>
-          <div class="val">${s.sl_pct}%</div>
-        </div>
-        <div class="sig-item">
-          <div class="lbl">Live Price</div>
-          <div class="val">₹${s.live_price}</div>
-        </div>
-      </div>
-      <div style="font-size:10px;color:var(--muted);margin-top:8px">
-        EMA9: ${s.ema9} &nbsp;|&nbsp; EMA20: ${s.ema20}
-        &nbsp;|&nbsp; BE → ₹${s.entry} at 1R
-      </div>
-    </div>
-  `).join('');
-}
-
-// ══════════════════════════════════════════════
-// HISTORY
-// ══════════════════════════════════════════════
-async function loadHistory(){
-  const r  = await fetch('/api/signals/history');
-  const days = await r.json();
-  const el = document.getElementById('history-list');
-
-  if(!days || days.length===0){
-    el.innerHTML=`<div class="empty">
-      <div class="icon">📂</div>
-      <div class="msg">No historical data yet.</div>
-    </div>`;
-    return;
-  }
-
-  el.innerHTML = days.map((day,idx)=>`
-    <div class="hist-day">
-      <div class="hist-header" onclick="toggleHistDay(${idx})">
-        <div class="hist-date">${fmtDate(day.date)}</div>
-        <div class="hist-badge${day.count===0?' zero':''}">
-          ${day.count===0 ? 'No signals' : day.count+' signal'+(day.count>1?'s':'')}
-        </div>
-      </div>
-      <div class="hist-body" id="hist-body-${idx}">
-        ${day.signals.length===0
-          ? '<div style="color:var(--muted);font-size:13px;padding-top:4px">No signals this day.</div>'
-          : day.signals.map(s=>`
-            <div class="hist-row">
-              <div class="hist-ticker">${s.ticker}</div>
-              <div class="hist-entry">₹${s.entry}</div>
-              <div class="hist-sl">₹${s.stop_loss}</div>
-              <div class="hist-2r">₹${s.target_2r}</div>
-            </div>`).join('')
-        }
-      </div>
-    </div>
-  `).join('');
-}
-
-function toggleHistDay(idx){
-  const el = document.getElementById('hist-body-'+idx);
-  el.classList.toggle('open');
-}
-
-function fmtDate(str){
+async function pollProg(){
   try{
-    const d = new Date(str);
-    return d.toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'});
-  }catch{return str}
+    const d=await(await fetch('/api/scan/progress')).json();
+    document.getElementById('prog-wrap').style.display='block';
+    document.getElementById('prog-bar').style.width=d.pct+'%';
+    document.getElementById('prog-cnt').textContent=d.scanned+' / '+d.total;
+    document.getElementById('prog-pct').textContent=d.pct+'%';
+    document.getElementById('prog-tick').textContent=
+      d.running?('Scanning: '+d.current_ticker):'✅ Done';
+    if(!d.running){ scanRunning=false; updateScanBtn(); stopProg();
+      if(activeTab==='today') loadToday(); pollStatus(); }
+  }catch(e){}
+}
+function startProg(){ if(progTimer)return; progTimer=setInterval(pollProg,800); }
+function stopProg(){ clearInterval(progTimer); progTimer=null; }
+
+async function toggleSchedule(){
+  const d=await(await fetch('/api/schedule/toggle',{method:'POST'})).json();
+  toast(d.auto_schedule?'Auto schedule ON':'Auto schedule OFF');
 }
 
-// ══════════════════════════════════════════════
-// SCAN LOG
-// ══════════════════════════════════════════════
-async function loadLog(){
-  const r    = await fetch('/api/scan/log');
-  const logs = await r.json();
-  const el   = document.getElementById('log-list');
+// ══════════════════════════════════════
+// SETTINGS
+// ══════════════════════════════════════
+function toggleSettings(){
+  const body  = document.getElementById('settings-body');
+  const arrow = document.getElementById('settings-arrow');
+  const open  = body.classList.toggle('open');
+  arrow.classList.toggle('open', open);
+  if(open) loadSettings();
+}
 
-  if(!logs || logs.length===0){
-    el.innerHTML=`<div class="empty" style="padding:30px">
-      <div class="icon">📋</div>
-      <div class="msg">No scans run yet.</div>
-    </div>`;
+async function loadSettings(){
+  try{
+    const d=await(await fetch('/api/settings')).json();
+    const p=d.params;
+    document.getElementById('p-ema').value = p.ema_proximity;
+    document.getElementById('p-rng').value = p.max_candle_rng;
+    document.getElementById('p-sl').value  = p.max_sl_pct;
+    document.getElementById('p-lb').value  = p.lookback_days;
+    // Remove changed styling
+    ['p-ema','p-rng','p-sl','p-lb'].forEach(id=>
+      document.getElementById(id).classList.remove('param-changed'));
+    updateParamSummary(p);
+  }catch(e){}
+}
+
+function markChanged(el){ el.classList.add('param-changed'); }
+
+function updateParamSummary(p){
+  document.getElementById('params-summary').textContent =
+    `EMA ${(p.ema_proximity*100).toFixed(1)}% · `+
+    `Rng ${(p.max_candle_rng*100).toFixed(1)}% · `+
+    `SL ${(p.max_sl_pct*100).toFixed(1)}%`;
+}
+
+async function saveSettings(){
+  const payload = {
+    ema_proximity:  parseFloat(document.getElementById('p-ema').value),
+    max_candle_rng: parseFloat(document.getElementById('p-rng').value),
+    max_sl_pct:     parseFloat(document.getElementById('p-sl').value),
+    lookback_days:  parseFloat(document.getElementById('p-lb').value),
+  };
+  const d=await(await fetch('/api/settings',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload)
+  })).json();
+  if(d.ok){
+    ['p-ema','p-rng','p-sl','p-lb'].forEach(id=>
+      document.getElementById(id).classList.remove('param-changed'));
+    updateParamSummary(d.params);
+    toast('✅ Parameters saved & applied');
+  }
+}
+
+async function resetSettings(){
+  const d=await(await fetch('/api/settings/reset',{method:'POST'})).json();
+  if(d.ok){ loadSettings(); toast('↺ Reset to defaults'); }
+}
+
+// ══════════════════════════════════════
+// TODAY
+// ══════════════════════════════════════
+async function loadToday(){
+  const d=await(await fetch('/api/signals/today')).json();
+  document.getElementById('today-hd').textContent='Today\'s Signals — '+d.date;
+  const el=document.getElementById('today-list');
+  if(!d.signals||d.signals.length===0){
+    el.innerHTML=`<div class="empty"><div class="icon">📭</div>
+      <div class="msg">No signals yet today.<br>Run a scan or wait for auto scan.</div></div>`;
     return;
   }
+  el.innerHTML=d.signals.map(s=>`
+    <div class="sig-card">
+      <div class="sig-hd">
+        <div class="sig-ticker">${s.ticker}</div>
+        <div class="sig-time">${s.timestamp.slice(11,16)}</div>
+      </div>
+      <div class="sig-grid">
+        <div class="si entry"><div class="l">Entry</div><div class="v">₹${s.entry}</div></div>
+        <div class="si sl"><div class="l">Stop Loss</div><div class="v">₹${s.stop_loss}</div></div>
+        <div class="si t2r"><div class="l">Target 2R</div><div class="v">₹${s.target_2r}</div></div>
+        <div class="si t3r"><div class="l">Target 3R</div><div class="v">₹${s.target_3r}</div></div>
+        <div class="si risk"><div class="l">SL Risk</div><div class="v">${s.sl_pct}%</div></div>
+        <div class="si"><div class="l">Live Price</div><div class="v">₹${s.live_price}</div></div>
+      </div>
+      <div style="font-size:10px;color:var(--muted);margin-top:7px">
+        EMA9 ${s.ema9} · EMA20 ${s.ema20} · BE → ₹${s.entry} at 1R
+      </div>
+    </div>`).join('');
+}
 
-  el.innerHTML = logs.map(l=>`
+// ══════════════════════════════════════
+// HISTORY
+// ══════════════════════════════════════
+async function loadHistory(){
+  const days=await(await fetch('/api/signals/history')).json();
+  const el=document.getElementById('history-list');
+  if(!days||days.length===0){
+    el.innerHTML=`<div class="empty"><div class="icon">📂</div>
+      <div class="msg">No historical data yet.</div></div>`;
+    return;
+  }
+  el.innerHTML=days.map((day,i)=>`
+    <div class="hist-day">
+      <div class="hist-hd" onclick="toggleHist(${i})">
+        <div class="hist-date">${fmtDate(day.date)}</div>
+        <div class="hist-badge${day.count===0?' z':''}">
+          ${day.count===0?'No signals':day.count+' signal'+(day.count>1?'s':'')}</div>
+      </div>
+      <div class="hist-body" id="hb-${i}">
+        ${day.signals.length===0
+          ?'<div style="color:var(--muted);font-size:13px;padding-top:4px">No signals.</div>'
+          :day.signals.map(s=>`
+            <div class="hist-row">
+              <span style="font-weight:700;color:var(--green);width:90px">${s.ticker}</span>
+              <span style="color:var(--accent)">₹${s.entry}</span>
+              <span style="color:var(--red)">₹${s.stop_loss}</span>
+              <span style="color:var(--yellow)">₹${s.target_2r}</span>
+            </div>`).join('')}
+      </div>
+    </div>`).join('');
+}
+function toggleHist(i){
+  document.getElementById('hb-'+i).classList.toggle('open');
+}
+function fmtDate(s){
+  try{return new Date(s).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'})}
+  catch{return s}
+}
+
+// ══════════════════════════════════════
+// BACKTEST
+// ══════════════════════════════════════
+function initBacktest(){
+  // Set default end date to today
+  if(!document.getElementById('bt-end').value){
+    const ist = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
+    document.getElementById('bt-end').value = ist.toISOString().slice(0,10);
+  }
+  // Load current params as placeholders
+  fetch('/api/settings').then(r=>r.json()).then(d=>{
+    const p=d.params;
+    document.getElementById('bt-ema').placeholder=`current: ${p.ema_proximity}`;
+    document.getElementById('bt-rng').placeholder=`current: ${p.max_candle_rng}`;
+    document.getElementById('bt-sl').placeholder=`current: ${p.max_sl_pct}`;
+    document.getElementById('bt-cap').placeholder=`current: ${p.initial_cash}`;
+  });
+}
+
+async function runBacktest(){
+  const ticker = document.getElementById('bt-ticker').value.trim()||'RELIANCE';
+  const start  = document.getElementById('bt-start').value||'2022-01-01';
+  const end    = document.getElementById('bt-end').value;
+  const sendTg = document.getElementById('bt-tg-toggle').checked;
+
+  const payload = { ticker, start_date:start, end_date:end, send_telegram:sendTg };
+  const emav = document.getElementById('bt-ema').value;
+  const rngv = document.getElementById('bt-rng').value;
+  const slv  = document.getElementById('bt-sl').value;
+  const capv = document.getElementById('bt-cap').value;
+  if(emav) payload.ema_proximity  = parseFloat(emav);
+  if(rngv) payload.max_candle_rng = parseFloat(rngv);
+  if(slv)  payload.max_sl_pct     = parseFloat(slv);
+  if(capv) payload.initial_cash   = parseFloat(capv);
+
+  const r=await(await fetch('/api/backtest/run',{
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(payload)
+  })).json();
+
+  if(!r.ok){ toast(r.msg||'Error starting backtest'); return; }
+
+  // Show progress card
+  document.getElementById('bt-results').style.display='none';
+  document.getElementById('bt-prog-card').style.display='block';
+  document.getElementById('bt-run-btn').disabled=true;
+  resetBtSteps();
+  toast('Backtest started…');
+
+  btPollTimer = setInterval(pollBtProgress, 1200);
+}
+
+function resetBtSteps(){
+  for(let i=0;i<4;i++) document.getElementById('bts-'+i).className='bt-step';
+}
+
+async function pollBtProgress(){
+  try{
+    const d=await(await fetch('/api/backtest/progress')).json();
+    document.getElementById('bt-status-txt').textContent=d.current||'…';
+
+    // Activate steps
+    if(d.progress>=1) document.getElementById('bts-0').className='bt-step done';
+    [1,2,3].forEach((s,i)=>{
+      const el=document.getElementById('bts-'+s);
+      if(d.progress>s)       el.className='bt-step done';
+      else if(d.progress===s) el.className='bt-step active';
+    });
+
+    if(d.error){
+      clearInterval(btPollTimer); btPollTimer=null;
+      document.getElementById('bt-prog-card').style.display='none';
+      document.getElementById('bt-run-btn').disabled=false;
+      toast('❌ '+d.error); return;
+    }
+
+    if(!d.running && d.progress>=3){
+      clearInterval(btPollTimer); btPollTimer=null;
+      // Mark all done
+      for(let i=0;i<4;i++) document.getElementById('bts-'+i).className='bt-step done';
+      await new Promise(r=>setTimeout(r,400));
+      document.getElementById('bt-prog-card').style.display='none';
+      document.getElementById('bt-run-btn').disabled=false;
+      await loadBtResults();
+    }
+  }catch(e){}
+}
+
+async function loadBtResults(){
+  const d=await(await fetch('/api/backtest/result')).json();
+  if(!d||!d.results){ return; }
+  btData=d;
+
+  document.getElementById('bt-res-title').textContent=
+    `${d.ticker}  ·  ${d.start} → ${d.end}  ·  ${d.signals} setups`;
+
+  // Comparison table
+  const modes=['2R','3R','EMA9'];
+  const labels={'2R':'Exit 2R','3R':'Exit 3R','EMA9':'Trail EMA9'};
+  const rets  = modes.map(m=>d.results[m]?.metrics?.return_pct||0);
+  const maxRet= Math.max(...rets);
+  const minRet= Math.min(...rets);
+  const wrs   = modes.map(m=>d.results[m]?.metrics?.win_rate||0);
+  const maxWR = Math.max(...wrs);
+
+  document.getElementById('cmp-body').innerHTML = modes.map((m,i)=>{
+    const mt = d.results[m]?.metrics;
+    if(!mt) return `<tr><td class="mode-lbl">${labels[m]}</td><td colspan="5">—</td></tr>`;
+    const pf = mt.profit_factor??'∞';
+    const rCls = mt.return_pct===maxRet?'best-cell':(mt.return_pct===minRet?'worst-cell':'');
+    const wCls = mt.win_rate===maxWR?'best-cell':'';
+    return `<tr>
+      <td class="mode-lbl">${labels[m]}</td>
+      <td>${mt.trades}</td>
+      <td class="${wCls}">${mt.win_rate}%</td>
+      <td class="${rCls}">${mt.return_pct}%</td>
+      <td>${pf}</td>
+      <td>${mt.max_dd}%</td>
+    </tr>`;
+  }).join('');
+
+  selectMode('2R');
+  document.getElementById('bt-results').style.display='block';
+  document.getElementById('bt-results').scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+function selectMode(mode){
+  activeBtMode=mode;
+  ['2R','3R','EMA9'].forEach(m=>{
+    document.getElementById('mt-'+m).classList.toggle('active',m===mode);
+  });
+  if(!btData) return;
+  const mt = btData.results[mode]?.metrics;
+  if(!mt){ document.getElementById('detail-metrics').innerHTML='<div style="color:var(--muted);font-size:13px">No data</div>'; return; }
+
+  const pf   = mt.profit_factor??'∞';
+  const cap  = '₹'+Number(mt.final_cap).toLocaleString('en-IN');
+  const retC = mt.return_pct>=0?'var(--green)':'var(--red)';
+  const pnlC = mt.total_pnl>=0?'var(--green)':'var(--red)';
+
+  document.getElementById('detail-metrics').innerHTML=`
+    <div class="metric-box"><div class="mv" style="color:${retC}">${mt.return_pct}%</div><div class="ml">Total Return</div></div>
+    <div class="metric-box"><div class="mv" style="color:var(--accent)">${mt.win_rate}%</div><div class="ml">Win Rate</div></div>
+    <div class="metric-box"><div class="mv">${cap}</div><div class="ml">Final Capital</div></div>
+    <div class="metric-box"><div class="mv" style="color:${pnlC}">₹${Number(mt.total_pnl).toLocaleString('en-IN')}</div><div class="ml">Net P&amp;L</div></div>
+    <div class="metric-box"><div class="mv">${pf}</div><div class="ml">Profit Factor</div></div>
+    <div class="metric-box"><div class="mv" style="color:var(--red)">${mt.max_dd}%</div><div class="ml">Max Drawdown</div></div>
+    <div class="metric-box"><div class="mv">${mt.trades}</div><div class="ml">Total Trades</div></div>
+    <div class="metric-box"><div class="mv">₹${Number(mt.avg_win).toLocaleString('en-IN')}</div><div class="ml">Avg Win</div></div>
+  `;
+
+  document.getElementById('streak-win').textContent  = mt.max_win_streak;
+  document.getElementById('streak-loss').textContent = mt.max_loss_streak;
+}
+
+// ══════════════════════════════════════
+// LOG
+// ══════════════════════════════════════
+async function loadLog(){
+  const logs=await(await fetch('/api/scan/log')).json();
+  const el=document.getElementById('log-list');
+  if(!logs||logs.length===0){
+    el.innerHTML=`<div class="empty" style="padding:28px">
+      <div class="icon">📋</div><div class="msg">No scans yet.</div></div>`;
+    return;
+  }
+  el.innerHTML=logs.map(l=>`
     <div class="log-row">
       <div class="log-time">${l.time||'--'}</div>
-      <div class="log-info">
-        <div>${l.date||''} &nbsp;·&nbsp; ${l.total_stocks||0} stocks
-          &nbsp;·&nbsp; ${l.elapsed_sec||0}s</div>
+      <div style="flex:1;padding:0 8px">
+        <div>${l.date||''}  ·  ${l.total_stocks||0} stocks  ·  ${l.elapsed_sec||0}s</div>
         ${l.tickers_found&&l.tickers_found.length>0
-          ? `<div style="color:var(--green);font-size:11px;margin-top:2px">
-               ${l.tickers_found.join(', ')}</div>`
-          : ''}
+          ?`<div style="color:var(--green);font-size:11px;margin-top:2px">
+              ${l.tickers_found.join(', ')}</div>`:''}
       </div>
-      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
-        <span class="log-type ${l.type}">${l.type||'auto'}</span>
-        <span class="log-signals${(l.signals_found||0)===0?' zero':''}">
-          ${l.signals_found||0} sig
-        </span>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px">
+        <span class="log-type ${l.type||'auto'}">${l.type||'auto'}</span>
+        <span class="log-sigs${(l.signals_found||0)===0?' z':''}">
+          ${l.signals_found||0} sig</span>
       </div>
-    </div>
-  `).join('');
+    </div>`).join('');
 }
 
-// ══════════════════════════════════════════════
+// ══════════════════════════════════════
 // TOAST
-// ══════════════════════════════════════════════
-let toastTimer;
+// ══════════════════════════════════════
+let toastT;
 function toast(msg){
-  const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(()=>el.classList.remove('show'), 2500);
+  const el=document.getElementById('toast');
+  el.textContent=msg; el.classList.add('show');
+  clearTimeout(toastT); toastT=setTimeout(()=>el.classList.remove('show'),2600);
 }
 </script>
 </body>
