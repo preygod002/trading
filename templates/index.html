@@ -630,9 +630,14 @@ let activeTab    = 'scan';
 let scanRunning  = false;
 let progTimer    = null;
 let statusTimer  = null;
-let btPollTimer  = null;
-let btData       = null;
-let activeBtMode = '2R';
+let btPollTimer      = null;
+let btData           = null;
+let activeBtMode     = '2R';
+let activeBtView     = 'single';
+let activeFbtMode    = '2R';
+let activeLeaderMode = '2R';
+let fbtData          = null;
+let fbtPollTimer     = null;
 
 // ══════════════════════════════════════
 // CLOCK
@@ -865,11 +870,11 @@ function fmtDate(s){
 // BACKTEST
 // ══════════════════════════════════════
 function initBacktest(){
-  // Set default end date to today
-  if(!document.getElementById('bt-end').value){
-    const ist = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
-    document.getElementById('bt-end').value = ist.toISOString().slice(0,10);
-  }
+  // Always set end date to today
+  const _ist = new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Kolkata'}));
+  const _today = _ist.toISOString().slice(0,10);
+  document.getElementById('bt-end').value  = _today;
+  document.getElementById('fbt-end').value = _today;
   // Load current params as placeholders
   fetch('/api/settings').then(r=>r.json()).then(d=>{
     const p=d.params;
@@ -881,36 +886,40 @@ function initBacktest(){
 }
 
 async function runBacktest(){
-  const ticker = document.getElementById('bt-ticker').value.trim()||'RELIANCE';
-  const start  = document.getElementById('bt-start').value||'2022-01-01';
-  const end    = document.getElementById('bt-end').value;
-  const sendTg = document.getElementById('bt-tg-toggle').checked;
+  try{
+    const ticker = document.getElementById('bt-ticker').value.trim()||'RELIANCE';
+    const start  = document.getElementById('bt-start').value||'2022-01-01';
+    const end    = document.getElementById('bt-end').value;
+    if(!end){ toast('Please select an end date'); return; }
+    const sendTg = document.getElementById('bt-tg-toggle').checked;
 
-  const payload = { ticker, start_date:start, end_date:end, send_telegram:sendTg };
-  const emav = document.getElementById('bt-ema').value;
-  const rngv = document.getElementById('bt-rng').value;
-  const slv  = document.getElementById('bt-sl').value;
-  const capv = document.getElementById('bt-cap').value;
-  if(emav) payload.ema_proximity  = parseFloat(emav);
-  if(rngv) payload.max_candle_rng = parseFloat(rngv);
-  if(slv)  payload.max_sl_pct     = parseFloat(slv);
-  if(capv) payload.initial_cash   = parseFloat(capv);
+    const payload = { ticker, start_date:start, end_date:end, send_telegram:sendTg };
+    const emav = document.getElementById('bt-ema').value;
+    const rngv = document.getElementById('bt-rng').value;
+    const slv  = document.getElementById('bt-sl').value;
+    const capv = document.getElementById('bt-cap').value;
+    if(emav) payload.ema_proximity  = parseFloat(emav);
+    if(rngv) payload.max_candle_rng = parseFloat(rngv);
+    if(slv)  payload.max_sl_pct     = parseFloat(slv);
+    if(capv) payload.initial_cash   = parseFloat(capv);
 
-  const r=await(await fetch('/api/backtest/run',{
-    method:'POST', headers:{'Content-Type':'application/json'},
-    body:JSON.stringify(payload)
-  })).json();
+    const r=await(await fetch('/api/backtest/run',{
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)
+    })).json();
 
-  if(!r.ok){ toast(r.msg||'Error starting backtest'); return; }
+    if(!r.ok){ toast(r.msg||'Error starting backtest'); return; }
 
-  // Show progress card
-  document.getElementById('bt-results').style.display='none';
-  document.getElementById('bt-prog-card').style.display='block';
-  document.getElementById('bt-run-btn').disabled=true;
-  resetBtSteps();
-  toast('Backtest started…');
-
-  btPollTimer = setInterval(pollBtProgress, 1200);
+    document.getElementById('bt-results').style.display='none';
+    document.getElementById('bt-prog-card').style.display='block';
+    document.getElementById('bt-run-btn').disabled=true;
+    resetBtSteps();
+    toast('Backtest started…');
+    btPollTimer = setInterval(pollBtProgress, 1200);
+  } catch(err){
+    toast('JS Error: '+err.message);
+    console.error('runBacktest error:', err);
+  }
 }
 
 function resetBtSteps(){
