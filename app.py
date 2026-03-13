@@ -165,8 +165,14 @@ def fetch_and_check(ticker):
         import logging
         logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
-        hist = yf.download(ticker, period=f"{int(params['lookback_days'])}d",
-                           interval="1d", auto_adjust=True, progress=False)
+        # Use Ticker.history() — more reliable on cloud deployments
+        _t = yf.Ticker(ticker)
+        hist = _t.history(period=f"{int(params['lookback_days'])}d",
+                          interval="1d", auto_adjust=True, actions=False)
+        if hist is None or hist.empty or len(hist) < 10:
+            # fallback to download()
+            hist = yf.download(ticker, period=f"{int(params['lookback_days'])}d",
+                               interval="1d", auto_adjust=True, progress=False, threads=False)
         if hist is None or hist.empty or len(hist) < 10:
             return None
         hist.dropna(inplace=True)
@@ -174,9 +180,14 @@ def fetch_and_check(ticker):
             hist.columns = [c[0] for c in hist.columns]
         else:
             hist.columns = [c[0] if isinstance(c, tuple) else c for c in hist.columns]
+        # Remove timezone from index if present
+        if hasattr(hist.index, 'tz') and hist.index.tz is not None:
+            hist.index = hist.index.tz_localize(None)
 
-        live_raw = yf.download(ticker, period="1d", interval="1m",
-                               auto_adjust=True, progress=False)
+        live_raw = _t.history(period="1d", interval="1m", auto_adjust=True, actions=False)
+        if live_raw is None or live_raw.empty:
+            live_raw = yf.download(ticker, period="1d", interval="1m",
+                                   auto_adjust=True, progress=False, threads=False)
         if live_raw.empty:
             return None
         live_raw.columns = [c[0] if isinstance(c, tuple) else c for c in live_raw.columns]
@@ -288,68 +299,112 @@ def _bg_scan(manual=False):
 # BACKTEST ENGINE
 # ══════════════════════════════════════════════════════════════════
 
-def _bt_prepare(ticker, start_date, end_date, p):
+def _fetch_ohlcv(ticker, start_date, end_date):
+    """
+    Fetch daily OHLCV using Ticker.history() — more reliable on cloud than yf.download().
+    Falls back to yf.download() if history() fails.
+    Returns clean DataFrame with columns [Open,High,Low,Close,Volume] or None.
+    """
     import logging
     logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
-    warmup = (pd.Timestamp(start_date) - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
-    print(f"[BT] {ticker}: warmup={warmup} end={end_date}", flush=True)
-
-    raw = None
-    last_err = ""
-
-    # Attempt 1: standard download
-    try:
-        raw = yf.download(ticker, start=warmup, end=end_date,
-                          interval="1d", auto_adjust=True, progress=False)
-        print(f"[BT] {ticker}: attempt1 rows={len(raw) if raw is not None else 'None'} "
-              f"cols={list(raw.columns) if raw is not None and not raw.empty else '[]'}", flush=True)
-    except Exception as e:
-        last_err = str(e)
-        print(f"[BT] {ticker}: attempt1 exception: {e}", flush=True)
-        if any(x in last_err.lower() for x in ["delisted","no timezone","tzmissing","yftzmissing"]):
-            print(f"[BT] {ticker}: delisted/no-tz — skipping", flush=True)
+    def _clean(raw):
+        """Flatten MultiIndex, keep OHLCV, drop NaN rows."""
+        if raw is None or raw.empty:
             return None
-        time.sleep(1.0)
+        if isinstance(raw.columns, pd.MultiIndex):
+            raw.columns = [c[0] for c in raw.columns]
+        else:
+            raw.columns = [str(c[0]) if isinstance(c, tuple) else str(c) for c in raw.columns]
+        needed = [c for c in ["Open","High","Low","Close","Volume"] if c in raw.columns]
+        if not all(c in needed for c in ["Open","High","Low","Close"]):
+            return None
+        df = raw[needed].copy()
+        df.dropna(subset=["Open","High","Low","Close"], inplace=True)
+        df.index = pd.to_datetime(df.index).tz_localize(None)
+        df = df[(df.index >= pd.Timestamp(start_date)) &
+                (df.index <= pd.Timestamp(end_date))]
+        return df if len(df) >= 10 else None
 
-    # Attempt 2: auto_adjust=False if first attempt empty
-    if raw is None or raw.empty or len(raw) < 10:
-        try:
-            time.sleep(0.5)
-            raw = yf.download(ticker, start=warmup, end=end_date,
-                              interval="1d", auto_adjust=False, progress=False)
-            print(f"[BT] {ticker}: attempt2 rows={len(raw) if raw is not None else 'None'}", flush=True)
-        except Exception as e:
-            last_err = str(e)
-            print(f"[BT] {ticker}: attempt2 exception: {e}", flush=True)
+    # ── Method 1: Ticker.history() — uses different Yahoo endpoint ──
+    try:
+        t   = yf.Ticker(ticker)
+        raw = t.history(start=start_date, end=end_date,
+                        interval="1d", auto_adjust=True, actions=False)
+        df  = _clean(raw)
+        if df is not None:
+            print(f"[BT] {ticker}: history() ✅ {len(df)} rows", flush=True)
+            return df
+        print(f"[BT] {ticker}: history() returned empty", flush=True)
+    except Exception as e:
+        print(f"[BT] {ticker}: history() error: {e}", flush=True)
+        if any(x in str(e).lower() for x in ["delisted","no timezone","tzmissing","yftzmissing"]):
+            return None
 
-    if raw is None or raw.empty or len(raw) < 10:
-        print(f"[BT] {ticker}: all attempts returned no data. last_err={last_err!r}", flush=True)
+    time.sleep(0.5)
+
+    # ── Method 2: yf.download() fallback ────────────────────────────
+    try:
+        raw = yf.download(ticker, start=start_date, end=end_date,
+                          interval="1d", auto_adjust=True, progress=False,
+                          threads=False)
+        df  = _clean(raw)
+        if df is not None:
+            print(f"[BT] {ticker}: download() ✅ {len(df)} rows", flush=True)
+            return df
+        print(f"[BT] {ticker}: download() returned empty", flush=True)
+    except Exception as e:
+        print(f"[BT] {ticker}: download() error: {e}", flush=True)
+
+    time.sleep(0.5)
+
+    # ── Method 3: Manual Yahoo Finance v8 API call ───────────────────
+    try:
+        import requests as _req
+        import datetime as _dt
+        p1 = int(pd.Timestamp(start_date).timestamp())
+        p2 = int(pd.Timestamp(end_date).timestamp())
+        sym = ticker.replace(".NS", "") + ".NS"
+        url = (f"https://query2.finance.yahoo.com/v8/finance/chart/{sym}"
+               f"?period1={p1}&period2={p2}&interval=1d&events=history")
+        headers = {
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/120.0.0.0 Safari/537.36"),
+            "Accept": "application/json",
+        }
+        r = _req.get(url, headers=headers, timeout=15)
+        print(f"[BT] {ticker}: v8 API status={r.status_code}", flush=True)
+        if r.status_code == 200:
+            j      = r.json()
+            result = j.get("chart", {}).get("result", [])
+            if result:
+                ts     = result[0]["timestamp"]
+                q      = result[0]["indicators"]["quote"][0]
+                adjc   = result[0]["indicators"].get("adjclose", [{}])[0].get("adjclose", q["close"])
+                dates  = pd.to_datetime(ts, unit="s").tz_localize("UTC").tz_convert("Asia/Kolkata").tz_localize(None).normalize()
+                raw2   = pd.DataFrame({
+                    "Open":   q["open"],  "High":  q["high"],
+                    "Low":    q["low"],   "Close": adjc,
+                    "Volume": q["volume"],
+                }, index=dates)
+                df = _clean(raw2)
+                if df is not None:
+                    print(f"[BT] {ticker}: v8 API ✅ {len(df)} rows", flush=True)
+                    return df
+        print(f"[BT] {ticker}: v8 API returned no usable data", flush=True)
+    except Exception as e:
+        print(f"[BT] {ticker}: v8 API error: {e}", flush=True)
+
+    print(f"[BT] {ticker}: ❌ all methods failed", flush=True)
+    return None
+
+
+def _bt_prepare(ticker, start_date, end_date, p):
+    warmup = (pd.Timestamp(start_date) - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
+    df = _fetch_ohlcv(ticker, warmup, end_date)
+    if df is None:
         return None
-
-    # Flatten MultiIndex columns (yfinance >= 0.2 returns MultiIndex)
-    print(f"[BT] {ticker}: raw cols before flatten: {list(raw.columns)}", flush=True)
-    if isinstance(raw.columns, pd.MultiIndex):
-        raw.columns = [c[0] for c in raw.columns]
-    else:
-        raw.columns = [str(c[0]) if isinstance(c, tuple) else str(c) for c in raw.columns]
-    print(f"[BT] {ticker}: cols after flatten: {list(raw.columns)}", flush=True)
-
-    # Keep OHLCV only
-    missing = [c for c in ["Open","High","Low","Close"] if c not in raw.columns]
-    if missing:
-        print(f"[BT] {ticker}: missing columns {missing} — cannot proceed", flush=True)
-        return None
-
-    df = raw[[c for c in ["Open","High","Low","Close","Volume"] if c in raw.columns]].copy()
-    df.dropna(subset=["Open","High","Low","Close"], inplace=True)
-
-    if len(df) < 10:
-        print(f"[BT] {ticker}: only {len(df)} clean rows after dropna", flush=True)
-        return None
-
-    df.index = pd.to_datetime(df.index)
-    df = df[df.index <= pd.Timestamp(end_date)]
 
     df["EMA9"]       = df["Close"].ewm(span=9,  adjust=False).mean()
     df["EMA20"]      = df["Close"].ewm(span=20, adjust=False).mean()
@@ -358,8 +413,6 @@ def _bt_prepare(ticker, start_date, end_date, p):
     df["Range3Hi"]   = df["High"].shift(1).rolling(3).max()
     above            = (df["Close"] > df["EMA20"]).astype(int)
     df["Above20_3d"] = above.shift(1).rolling(3).min()
-
-    print(f"[BT] {ticker}: ✅ ready — {len(df)} rows", flush=True)
     return df
 
 
@@ -982,18 +1035,17 @@ def api_backtest_test():
     start  = request.args.get("start",  "2022-01-01")
     end    = request.args.get("end",    ist_now().strftime("%Y-%m-%d"))
     try:
-        import traceback
-        df = _bt_prepare(ticker, start, end, params)
+        df = _fetch_ohlcv(ticker, start, end)
         if df is None:
-            return jsonify({"ok": False, "msg": f"_bt_prepare returned None for {ticker}",
+            return jsonify({"ok": False, "msg": f"All fetch methods failed for {ticker}. Check Railway logs for details.",
                             "ticker": ticker, "start": start, "end": end})
-        sigs = _bt_signals(df, start, params)
+        sigs = _bt_signals(df, start, params) if df is not None else []
         return jsonify({
-            "ok":      True,
-            "ticker":  ticker,
-            "rows":    len(df),
-            "signals": len(sigs),
-            "cols":    list(df.columns),
+            "ok":         True,
+            "ticker":     ticker,
+            "rows":       len(df),
+            "signals":    len(sigs),
+            "cols":       list(df.columns),
             "date_range": [str(df.index[0].date()), str(df.index[-1].date())],
             "sample_close": round(float(df["Close"].iloc[-1]), 2),
         })
@@ -1010,3 +1062,4 @@ _start_scheduler()
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
+
