@@ -111,6 +111,17 @@ state = {
 bt_state = {
     "running": False, "progress": 0, "total": 3,
     "current": "", "result": None, "error": None,
+    "mode": "single",          # "single" | "full"
+}
+
+# Full F&O scan backtest state
+scan_bt_state = {
+    "running":  False,
+    "progress": 0,          # stocks completed
+    "total":    len(TICKERS),
+    "current":  "",
+    "result":   None,
+    "error":    None,
 }
 
 SCAN_TIMES = [
@@ -267,12 +278,40 @@ def _bg_scan(manual=False):
 
 def _bt_prepare(ticker, start_date, end_date, p):
     warmup = (pd.Timestamp(start_date) - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
-    df = yf.download(ticker, start=warmup, end=end_date,
-                     interval="1d", auto_adjust=True, progress=False)
-    if df.empty or len(df) < 10:
+
+    df = None
+    # Try multiple download strategies
+    for kwargs in [
+        dict(start=warmup, end=end_date, interval="1d", auto_adjust=True,  progress=False),
+        dict(start=warmup, end=end_date, interval="1d", auto_adjust=False, progress=False),
+        dict(start=warmup,               interval="1d", auto_adjust=True,  progress=False),
+    ]:
+        try:
+            raw = yf.download(ticker, **kwargs)
+            if raw is not None and not raw.empty and len(raw) >= 10:
+                df = raw; break
+        except Exception:
+            continue
+
+    if df is None or df.empty or len(df) < 10:
         return None
-    df.dropna(inplace=True)
-    df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+
+    # Flatten MultiIndex columns (yfinance >= 0.2.x)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = [c[0] for c in df.columns]
+    else:
+        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+
+    # Keep only OHLCV
+    needed = [c for c in ["Open","High","Low","Close","Volume"] if c in df.columns]
+    df = df[needed].copy()
+    df.dropna(subset=["Open","High","Low","Close"], inplace=True)
+    if len(df) < 10:
+        return None
+
+    df.index = pd.to_datetime(df.index)
+    df = df[df.index <= pd.Timestamp(end_date)]
+
     df["EMA9"]       = df["Close"].ewm(span=9,  adjust=False).mean()
     df["EMA20"]      = df["Close"].ewm(span=20, adjust=False).mean()
     df["CandleRng"]  = (df["High"] - df["Low"]) / df["Low"]
@@ -407,7 +446,10 @@ def run_backtest_job(ticker, start_date, end_date, p, send_tg):
     try:
         df = _bt_prepare(ticker, start_date, end_date, p)
         if df is None:
-            raise ValueError(f"No data returned for {ticker}")
+            raise ValueError(
+                f"Could not fetch data for {ticker}. "
+                f"Check the ticker is valid (e.g. RELIANCE.NS) and date range is not too recent."
+            )
         bt_state["current"] = "Detecting signals…"
         sigs = _bt_signals(df, start_date, p)
 
@@ -469,6 +511,133 @@ def _send_backtest_telegram(ticker, results, all_trades, start, end):
         )
     except Exception: pass
 
+
+
+# ══════════════════════════════════════════════════════════════════
+# FULL F&O SCAN BACKTEST ENGINE
+# ══════════════════════════════════════════════════════════════════
+
+def run_full_scan_backtest(start_date, end_date, p, send_tg):
+    """
+    Backtests every F&O ticker independently.
+    Returns per-stock leaderboard + combined portfolio equity.
+    Combined portfolio: trades from ALL stocks merged chronologically,
+    sharing a single capital pool (re-sized each trade).
+    """
+    scan_bt_state.update({
+        "running": True, "error": None, "result": None,
+        "progress": 0, "total": len(TICKERS), "current": "Starting…",
+    })
+
+    stock_results = []   # one row per ticker
+    all_trades    = []   # every trade across all stocks (for combined sim)
+
+    for idx, ticker in enumerate(TICKERS):
+        short = ticker.replace(".NS", "")
+        scan_bt_state.update({"progress": idx + 1, "current": short})
+        try:
+            df = _bt_prepare(ticker, start_date, end_date, p)
+            if df is None:
+                continue
+            sigs = _bt_signals(df, start_date, p)
+            if not sigs:
+                continue
+
+            for mode in ["2R", "3R", "EMA9"]:
+                trades, final_cap = _bt_simulate(sigs, df, mode, p)
+                if not trades:
+                    continue
+                m = _bt_metrics(trades, p["initial_cash"], final_cap)
+                stock_results.append({
+                    "ticker":      short,
+                    "exit_mode":   mode,
+                    "trades":      m["trades"],
+                    "win_rate":    m["win_rate"],
+                    "return_pct":  m["return_pct"],
+                    "profit_factor": m["profit_factor"],
+                    "max_dd":      m["max_dd"],
+                    "max_win_streak":  m["max_win_streak"],
+                    "max_loss_streak": m["max_loss_streak"],
+                })
+                # Tag each trade with ticker for combined sim
+                for t in trades:
+                    t2 = dict(t); t2["Ticker"] = short
+                    all_trades.append(t2)
+
+        except Exception:
+            continue
+
+        time.sleep(0.05)   # be gentle with yfinance
+
+    if not stock_results:
+        scan_bt_state.update({"running": False, "error": "No data returned for any ticker."})
+        return
+
+    # ── Leaderboard: top 10 per exit mode ─────────────────────────
+    leaderboard = {}
+    for mode in ["2R", "3R", "EMA9"]:
+        rows = [r for r in stock_results if r["exit_mode"] == mode]
+        rows.sort(key=lambda x: x["return_pct"], reverse=True)
+        leaderboard[mode] = rows[:10]
+
+    # ── Combined portfolio simulation ─────────────────────────────
+    # For each exit mode, take all trades, sort by entry date,
+    # re-run through shared capital sequentially
+    combined = {}
+    for mode in ["2R", "3R", "EMA9"]:
+        mode_trades = [t for t in all_trades if t["Exit_Mode"] == mode]
+        mode_trades.sort(key=lambda x: x["Entry"])
+        cap = p["initial_cash"]; equity = [cap]
+        for t in mode_trades:
+            cap += t["NetPnL"]
+            equity.append(round(cap, 0))
+        # Metrics on combined
+        cm = _bt_metrics(mode_trades, p["initial_cash"], cap) if mode_trades else {}
+        combined[mode] = {
+            "metrics": cm,
+            "equity_curve": equity[::max(1, len(equity)//200)],  # max 200 points
+        }
+
+    # ── Summary stats ──────────────────────────────────────────────
+    total_stocks_traded = len(set(r["ticker"] for r in stock_results))
+
+    scan_bt_state["result"] = {
+        "type":                 "full_scan",
+        "start":                start_date,
+        "end":                  end_date,
+        "total_stocks":         len(TICKERS),
+        "stocks_with_trades":   total_stocks_traded,
+        "params":               {k: p[k] for k in ["ema_proximity","max_candle_rng","max_sl_pct"]},
+        "leaderboard":          leaderboard,
+        "combined":             combined,
+    }
+
+    if send_tg and TELEGRAM_ENABLED and BOT_TOKEN:
+        _send_full_scan_telegram(scan_bt_state["result"])
+
+    scan_bt_state.update({"running": False, "current": "Done"})
+
+
+def _send_full_scan_telegram(result):
+    lines = [
+        f"📊 <b>Full F&O Scan Backtest</b>  ({result['start']} → {result['end']})",
+        f"Stocks traded: <b>{result['stocks_with_trades']}</b> / {result['total_stocks']}\n",
+    ]
+    labels = {"2R": "Exit 2R", "3R": "Exit 3R", "EMA9": "Trail EMA9"}
+    for mode, data in result["combined"].items():
+        m = data["metrics"]
+        if not m: continue
+        pf = str(m["profit_factor"]) if m["profit_factor"] else "∞"
+        lines.append(
+            f"<b>{labels[mode]}</b> (Combined Portfolio)\n"
+            f"  Return {m['return_pct']}% | Win {m['win_rate']}% | PF {pf}\n"
+            f"  MaxDD {m['max_dd']}% | Trades {m['trades']}\n"
+        )
+    for mode, top10 in result["leaderboard"].items():
+        lines.append(f"\n🏆 <b>Top 10 — {labels[mode]}</b>")
+        for i, r in enumerate(top10[:5], 1):
+            lines.append(f"  {i}. {r['ticker']} → {r['return_pct']}% | W {r['win_rate']}%")
+    _send_telegram("\n".join(lines))
 
 # ══════════════════════════════════════════════════════════════════
 # EOD SUMMARY
@@ -711,6 +880,43 @@ def api_backtest_result():
     return jsonify(bt_state["result"] or {})
 
 
+
+@app.route("/api/backtest/full/run", methods=["POST"])
+def api_full_bt_run():
+    if scan_bt_state["running"] or bt_state["running"]:
+        return jsonify({"ok": False, "msg": "A backtest is already running"})
+    data       = request.get_json(silent=True) or {}
+    start_date = data.get("start_date", "2022-01-01")
+    end_date   = data.get("end_date",   ist_now().strftime("%Y-%m-%d"))
+    send_tg    = bool(data.get("send_telegram", False))
+    p = dict(params)
+    for k in PARAM_DEFAULTS:
+        if k in data:
+            try: p[k] = float(data[k])
+            except Exception: pass
+    threading.Thread(target=run_full_scan_backtest,
+                     args=(start_date, end_date, p, send_tg),
+                     daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.route("/api/backtest/full/progress")
+def api_full_bt_progress():
+    return jsonify({
+        "running":  scan_bt_state["running"],
+        "progress": scan_bt_state["progress"],
+        "total":    scan_bt_state["total"],
+        "current":  scan_bt_state["current"],
+        "error":    scan_bt_state["error"],
+        "pct":      round(scan_bt_state["progress"] / scan_bt_state["total"] * 100, 1)
+                    if scan_bt_state["total"] else 0,
+    })
+
+
+@app.route("/api/backtest/full/result")
+def api_full_bt_result():
+    return jsonify(scan_bt_state["result"] or {})
+
 # ══════════════════════════════════════════════════════════════════
 # STARTUP
 # ══════════════════════════════════════════════════════════════════
@@ -721,5 +927,4 @@ _start_scheduler()
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port, debug=False)
-
 
