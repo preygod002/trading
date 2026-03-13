@@ -43,10 +43,12 @@ _logging.getLogger("peewee").setLevel(_logging.CRITICAL)
 # LIVE-EDITABLE STRATEGY PARAMETERS
 # ══════════════════════════════════════════════════════════════════
 PARAM_DEFAULTS = {
-    "ema_proximity":  0.005,
-    "max_candle_rng": 0.010,
-    "max_sl_pct":     0.050,
-    "lookback_days":  30,
+    # Consolidation-breakout strategy params
+    "min_consol_candles": 3,      # min consecutive candles above EMA20 for consolidation
+    "max_consol_rng":     0.015,  # 1.5% — max range of entire consolidation (HH-LL)/LL
+    "fixed_sl_pct":       0.02,   # 2% fixed SL below entry
+    "max_sl_pct":         0.05,   # skip trade if SL still wider than this after rule
+    # Exit / position sizing
     "be_trigger_r":   1.0,
     "target_2r":      2.0,
     "target_3r":      3.0,
@@ -54,6 +56,11 @@ PARAM_DEFAULTS = {
     "risk_per_trade": 0.02,
     "initial_cash":   100000,
     "brokerage":      0.001,
+    # Live scanner
+    "lookback_days":  30,
+    # kept for backward compat (not used in new strategy)
+    "ema_proximity":  0.005,
+    "max_candle_rng": 0.010,
 }
 params = dict(PARAM_DEFAULTS)
 
@@ -204,44 +211,54 @@ def fetch_and_check(ticker):
             hist = hist.iloc[:-1]
         df = pd.concat([hist, today_row]).copy()
 
-        df["EMA9"]       = df["Close"].ewm(span=9,  adjust=False).mean()
-        df["EMA20"]      = df["Close"].ewm(span=20, adjust=False).mean()
-        df["CandleRng"]  = (df["High"] - df["Low"]) / df["Low"]
-        df["MaxRng3"]    = df["CandleRng"].shift(1).rolling(3).max()
-        df["Range3Hi"]   = df["High"].shift(1).rolling(3).max()
-        above            = (df["Close"] > df["EMA20"]).astype(int)
-        df["Above20_3d"] = above.shift(1).rolling(3).min()
+        df["EMA9"]  = df["Close"].ewm(span=9,  adjust=False).mean()
+        df["EMA20"] = df["Close"].ewm(span=20, adjust=False).mean()
 
-        row  = df.iloc[-1]
-        ema9 = float(row["EMA9"]); ema20 = float(row["EMA20"])
+        # ── Consolidation-breakout signal on today's candle ──────────
+        row   = df.iloc[-1]
+        ema9  = float(row["EMA9"]); ema20 = float(row["EMA20"])
 
-        if ema9 <= ema20:                                                    return None
-        if row["Above20_3d"] < 1:                                           return None
-        if row["MaxRng3"]    > params["max_candle_rng"]:                    return None
-        today_low = float(row["Low"])
-        if abs(today_low - ema20) / ema20 > params["ema_proximity"]:        return None
+        # Uptrend
+        if ema9 < ema20: return None
 
-        range3_hi   = float(row["Range3Hi"])
-        live_price  = float(row["Close"])
-        entry_price = round(range3_hi, 2)
-        if live_price <= range3_hi:                                         return None
+        # Consolidation must exist in candles before today
+        consol = _find_consolidation(df, len(df) - 1, params)
+        if consol is None: return None
 
-        stop_loss = round(today_low, 2)
-        rpu       = entry_price - stop_loss
-        if rpu <= 0 or rpu / entry_price > params["max_sl_pct"]:           return None
+        c_start, c_end, c_high, c_low = consol
+        b_open  = float(row["Open"])
+        b_close = float(row["Close"])
+        b_high  = float(row["High"])
+        b_low   = float(row["Low"])
+
+        # Breakout candle checks (same as backtest)
+        if b_close <= b_open:   return None   # must be bullish
+        if b_close <= c_high:   return None   # must close above consol high
+        if b_high  <= c_high:   return None   # high must break consol
+        if b_open  <= ema20:    return None   # open above EMA20
+        if b_low   <= ema20:    return None   # low above EMA20 (whole candle above)
+
+        entry_price = round(c_high, 2)
+        sl_fixed    = round(entry_price * (1 - params.get("fixed_sl_pct", 0.02)), 2)
+        stop_loss   = round(max(sl_fixed, b_low), 2)
+
+        rpu = entry_price - stop_loss
+        if rpu <= 0 or rpu / entry_price > params.get("max_sl_pct", 0.05): return None
 
         sl_pct = round(rpu / entry_price * 100, 2)
         return {
-            "ticker":     short,
-            "timestamp":  ist_now().strftime("%Y-%m-%d %H:%M:%S"),
-            "live_price": round(live_price, 2),
-            "entry":      entry_price,
-            "stop_loss":  stop_loss,
-            "sl_pct":     sl_pct,
-            "target_2r":  round(entry_price + 2 * rpu, 2),
-            "target_3r":  round(entry_price + 3 * rpu, 2),
-            "ema9":       round(ema9, 2),
-            "ema20":      round(ema20, 2),
+            "ticker":       short,
+            "timestamp":    ist_now().strftime("%Y-%m-%d %H:%M:%S"),
+            "live_price":   round(b_close, 2),
+            "entry":        entry_price,
+            "stop_loss":    stop_loss,
+            "sl_pct":       sl_pct,
+            "target_2r":    round(entry_price + 2 * rpu, 2),
+            "target_3r":    round(entry_price + 3 * rpu, 2),
+            "ema9":         round(ema9, 2),
+            "ema20":        round(ema20, 2),
+            "consol_high":  round(c_high, 2),
+            "consol_low":   round(c_low, 2),
         }
     except Exception as e:
         err = str(e).lower()
@@ -406,28 +423,172 @@ def _bt_prepare(ticker, start_date, end_date, p):
     if df is None:
         return None
 
-    df["EMA9"]       = df["Close"].ewm(span=9,  adjust=False).mean()
-    df["EMA20"]      = df["Close"].ewm(span=20, adjust=False).mean()
-    df["CandleRng"]  = (df["High"] - df["Low"]) / df["Low"]
-    df["MaxRng3"]    = df["CandleRng"].shift(1).rolling(3).max()
-    df["Range3Hi"]   = df["High"].shift(1).rolling(3).max()
-    above            = (df["Close"] > df["EMA20"]).astype(int)
-    df["Above20_3d"] = above.shift(1).rolling(3).min()
+    df["EMA9"]  = df["Close"].ewm(span=9,  adjust=False).mean()
+    df["EMA20"] = df["Close"].ewm(span=20, adjust=False).mean()
     return df
 
 
+def _find_consolidation(df, breakout_idx, p):
+    """
+    Looks BACKWARD from breakout_idx (exclusive) to find a valid consolidation.
+
+    Rules:
+    - Each consolidation candle must CLOSE above EMA20
+    - The ENTIRE consolidation range: (max_high - min_low) / min_low <= 1.5%
+    - Minimum 3 consecutive candles (configurable)
+    - The consolidation low must be near EMA20:
+        min_low of consolidation within ema_proximity % of EMA20
+        (ensures consolidation is hugging the EMA, not floating far above)
+
+    Returns (start_idx, end_idx, consol_high, consol_low) or None.
+    end_idx is the last candle of the consolidation = breakout_idx - 1.
+    """
+    min_n      = int(p.get("min_consol_candles", 3))
+    max_rng    = p.get("max_consol_rng", 0.015)       # 1.5%
+    ema_prox   = p.get("ema_proximity", 0.015)         # consol low within X% of EMA20
+
+    end_idx = breakout_idx - 1   # last candle before breakout
+    if end_idx < min_n:
+        return None
+
+    # Walk backward one candle at a time, accumulating the window
+    hi_so_far = -1.0
+    lo_so_far = float("inf")
+
+    for start in range(end_idx, max(end_idx - 30, -1), -1):
+        row   = df.iloc[start]
+        c_cl  = float(row["Close"])
+        c_hi  = float(row["High"])
+        c_lo  = float(row["Low"])
+        ema20 = float(row["EMA20"])
+
+        # Each candle must close ABOVE EMA20
+        if c_cl <= ema20:
+            break
+
+        # Expand range
+        hi_so_far = max(hi_so_far, c_hi)
+        lo_so_far = min(lo_so_far, c_lo)
+
+        if lo_so_far <= 0:
+            break
+
+        # Entire range must stay within 1.5%
+        if (hi_so_far - lo_so_far) / lo_so_far > max_rng:
+            break
+
+        n = end_idx - start + 1   # candles in window so far
+        if n >= min_n:
+            # Proximity check: consolidation low must be near EMA20
+            # (use EMA20 of the last consolidation candle as reference)
+            ema20_ref = float(df.iloc[end_idx]["EMA20"])
+            if (lo_so_far - ema20_ref) / ema20_ref > ema_prox:
+                # Consolidation is floating too far above EMA20 — not a valid setup
+                # Keep extending backward in case earlier candles are closer
+                continue
+            return (start, end_idx, round(hi_so_far, 2), round(lo_so_far, 2))
+
+    return None
+
+
 def _bt_signals(df, start_date, p):
-    sigs = []; sd = pd.Timestamp(start_date)
-    for i in range(5, len(df)):
-        if df.index[i] < sd: continue
-        row = df.iloc[i]
-        if row["EMA9"] <= row["EMA20"]: continue
-        if row["Above20_3d"] < 1: continue
-        if row["MaxRng3"] > p["max_candle_rng"]: continue
-        if abs(row["Low"] - row["EMA20"]) / row["EMA20"] > p["ema_proximity"]: continue
-        sigs.append({"date": df.index[i], "idx": i,
-                     "stop_loss": round(float(row["Low"]), 2),
-                     "range3_hi": round(float(row["Range3Hi"]), 2)})
+    """
+    Consolidation-Breakout Strategy:
+
+    CONSOLIDATION (candles BEFORE the breakout):
+    - At least 3 consecutive candles closing above EMA20
+    - Entire range (highest high to lowest low) within 1.5%
+    - Consolidation low is near EMA20 (within ema_proximity %)
+
+    BREAKOUT CANDLE (candle i):
+    - EMA9 >= EMA20 (uptrend)
+    - Bullish: close > open
+    - Closes ABOVE consolidation high
+    - Breakout candle low and open both above EMA20
+      (entire candle completely above EMA20)
+
+    ENTRY:  consolidation high (the breakout level)
+    SL:     max(entry × (1 - 2%),  low of breakout candle)
+            → whichever is HIGHER (tighter)
+    """
+    sigs       = []
+    sd         = pd.Timestamp(start_date)
+    used_until = -1
+
+    for i in range(4, len(df)):
+        if df.index[i] < sd:
+            continue
+        if i <= used_until:
+            continue
+
+        row   = df.iloc[i]
+        ema20 = float(row["EMA20"])
+        ema9  = float(row["EMA9"])
+
+        # ── Uptrend filter ──────────────────────────────────────────
+        if ema9 < ema20:
+            continue
+
+        # ── Find valid consolidation just before this candle ────────
+        consol = _find_consolidation(df, i, p)
+        if consol is None:
+            continue
+
+        c_start, c_end, c_high, c_low = consol
+
+        # ── Breakout candle checks ───────────────────────────────────
+        b_open  = float(row["Open"])
+        b_close = float(row["Close"])
+        b_high  = float(row["High"])
+        b_low   = float(row["Low"])
+
+        # Must be bullish
+        if b_close <= b_open:
+            continue
+
+        # Must close above consolidation high
+        if b_close <= c_high:
+            continue
+
+        # High must have broken above consolidation high
+        if b_high <= c_high:
+            continue
+
+        # Entire candle must be above EMA20:
+        # open above EMA20 (candle started above), low above EMA20 (never dipped below)
+        if b_open <= ema20:
+            continue
+        if b_low <= ema20:
+            continue
+
+        # ── Entry & Stop Loss ────────────────────────────────────────
+        entry = round(c_high, 2)                         # entry at breakout level
+
+        sl_fixed  = round(entry * (1 - p.get("fixed_sl_pct", 0.02)), 2)
+        sl_candle = round(b_low, 2)
+        stop_loss = round(max(sl_fixed, sl_candle), 2)   # higher = tighter
+
+        if stop_loss >= entry:
+            continue
+
+        rpu = entry - stop_loss
+        if rpu <= 0:
+            continue
+        if rpu / entry > p.get("max_sl_pct", 0.05):     # skip if SL too wide
+            continue
+
+        sigs.append({
+            "date":         df.index[i],
+            "idx":          i,
+            "entry_price":  entry,
+            "stop_loss":    stop_loss,
+            "consol_high":  c_high,
+            "consol_low":   c_low,
+            "consol_start": c_start,
+            "consol_end":   c_end,
+        })
+        used_until = i   # no overlapping setups
+
     return sigs
 
 
@@ -436,13 +597,12 @@ def _bt_simulate(signals, df, exit_mode, p):
     for sig in signals:
         si = sig["idx"]
         if si <= last_used: continue
-        sl0 = sig["stop_loss"]; r3hi = sig["range3_hi"]
-        entry = entry_idx = None
-        for k in range(si + 1, min(si + 4, len(df))):
-            if k <= last_used: break
-            if float(df.iloc[k]["High"]) > r3hi:
-                entry = round(r3hi, 2); entry_idx = k; break
-        if entry is None: continue
+
+        # New strategy: entry is ON the breakout candle itself
+        entry     = sig["entry_price"]
+        entry_idx = si
+        sl0       = sig["stop_loss"]
+
         rps = entry - sl0
         if rps <= 0 or rps / entry > p["max_sl_pct"]: continue
         qty = int((capital * p["risk_per_trade"]) / rps)
@@ -490,13 +650,28 @@ def _bt_simulate(signals, df, exit_mode, p):
 
         net = round(gross - cost, 2); capital += net
         last_used = entry_idx + int(p["max_hold_days"])
+
+        # Derive exit price and R-multiple for CSV / chart
+        exit_px = round(entry + (gross / qty) if qty > 0 else entry, 2)
+        r_mult  = round((exit_px - entry) / rps, 2) if rps > 0 else 0
+
         trades.append({
-            "Exit_Mode": exit_mode,
-            "Setup":     sig["date"].strftime("%Y-%m-%d"),
-            "Entry":     df.index[entry_idx].strftime("%Y-%m-%d"),
-            "Exit":      exit_date.strftime("%Y-%m-%d") if exit_date else "",
-            "EntryPx":   entry, "SL": sl0,
-            "Outcome":   outcome, "NetPnL": net, "Capital": round(capital, 2),
+            "Exit_Mode":  exit_mode,
+            "Setup":      sig["date"].strftime("%Y-%m-%d"),
+            "Entry_Date": df.index[entry_idx].strftime("%Y-%m-%d"),
+            "Exit_Date":  exit_date.strftime("%Y-%m-%d") if exit_date else "",
+            "Entry_Price":entry, "Stop_Loss": sl0,
+            "Exit_Price": exit_px,
+            "R_Multiple": r_mult,
+            "Qty":        qty,
+            "Gross_PnL":  round(gross, 2),
+            "Net_PnL":    net,
+            "Capital":    round(capital, 2),
+            "Outcome":    outcome,
+            # keep old keys for backward compat
+            "Entry":      df.index[entry_idx].strftime("%Y-%m-%d"),
+            "Exit":       exit_date.strftime("%Y-%m-%d") if exit_date else "",
+            "EntryPx":    entry, "SL": sl0, "NetPnL": net,
         })
     return trades, capital
 
@@ -557,12 +732,33 @@ def run_backtest_job(ticker, start_date, end_date, p, send_tg):
             time.sleep(0.05)
 
         short = ticker.replace(".NS","")
+
+        # Build chart data — price series + EMA lines + all trades for selected mode
+        chart_dates  = [d.strftime("%Y-%m-%d") for d in df.index if pd.Timestamp(start_date) <= d]
+        df_chart     = df[df.index >= pd.Timestamp(start_date)]
+        chart_data   = {
+            "dates":  [d.strftime("%Y-%m-%d") for d in df_chart.index],
+            "close":  [round(float(v), 2) for v in df_chart["Close"]],
+            "ema9":   [round(float(v), 2) for v in df_chart["EMA9"]],
+            "ema20":  [round(float(v), 2) for v in df_chart["EMA20"]],
+        }
+
+        # Per-mode trade lists for chart markers + CSV
+        results_full = {}
+        for mode in ["2R","3R","EMA9"]:
+            trades_for_mode = [t for t in all_trades if t["Exit_Mode"] == mode]
+            results_full[mode] = {
+                "metrics": results[mode]["metrics"],
+                "trades":  trades_for_mode,
+            }
+
         bt_state["result"] = {
             "ticker": short, "start": start_date, "end": end_date,
             "signals": len(sigs),
             "params": {k: p[k] for k in ["ema_proximity","max_candle_rng","max_sl_pct",
                                           "initial_cash","risk_per_trade"]},
-            "results": results,
+            "results":    results_full,
+            "chart_data": chart_data,
         }
 
         if send_tg and TELEGRAM_ENABLED and BOT_TOKEN:
@@ -988,6 +1184,36 @@ def api_backtest_progress():
 @app.route("/api/backtest/result")
 def api_backtest_result():
     return jsonify(bt_state["result"] or {})
+
+
+@app.route("/api/backtest/csv")
+def api_backtest_csv():
+    """Download trade log as CSV for the selected exit mode."""
+    if not bt_state["result"]:
+        return "No backtest result available", 404
+    mode   = request.args.get("mode", "2R")
+    result = bt_state["result"]
+    trades = result.get("results", {}).get(mode, {}).get("trades", [])
+    if not trades:
+        return "No trades for this mode", 404
+
+    CSV_COLS = ["Exit_Mode","Entry_Date","Exit_Date","Entry_Price","Stop_Loss",
+                "Exit_Price","R_Multiple","Qty","Gross_PnL","Net_PnL","Capital","Outcome"]
+
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=CSV_COLS, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(trades)
+    buf.seek(0)
+
+    ticker = result.get("ticker","stock")
+    fname  = f"{ticker}_backtest_{mode}_{result.get('start','')}_{result.get('end','')}.csv"
+    from flask import Response
+    return Response(
+        buf.read(),
+        mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={fname}"}
+    )
 
 
 
