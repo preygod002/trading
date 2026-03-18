@@ -1,10 +1,22 @@
+
+
 """
-Swing Scanner — Flask Web App  v2
-===================================
-New in v2:
-  • Live-editable strategy parameters (EMA proximity, candle range, SL%)
-  • Full backtest engine — all 3 exits, metrics, streaks
-  • Optional Telegram delivery of backtest CSV
+Swing Scanner v3 — Box Breakout Strategy
+==========================================
+Setup:
+  1. Stock makes a continuous move of >=15% (no single day down >3%) over >=3 days
+  2. Then consolidates >=3 days in a tight box:
+       - All candle Highs within box_tight% of each other
+       - All candle Lows  within box_tight% of each other
+  3. EMA9 > EMA20, consolidation box is above EMA20
+  4. TWO alert types:
+       A) Watchlist alert  -- valid box detected (still consolidating)
+       B) Breakout alert   -- price closes above box High (breakout candle)
+
+Backtest -- 2 Entry Types x 3 Exits = 6 combinations:
+  Entry A: EOD buy on breakout day close (~3 PM)
+  Entry B: Intraday buy when price is >1% above box High on breakout day
+  Exit 1: 2R  |  Exit 2: 3R  |  Exit 3: EMA9-trail
 """
 
 from flask import Flask, jsonify, render_template, request
@@ -19,12 +31,16 @@ import json
 import io
 import os
 import csv
-from datetime import datetime, date
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import mplfinance as mpf
+from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 
-# ══════════════════════════════════════════════════════════════════
-# STATIC CONFIG
-# ══════════════════════════════════════════════════════════════════
+# ======================================================
+# CONFIG
+# ======================================================
 TELEGRAM_ENABLED = os.getenv("TELEGRAM_ENABLED", "false").lower() == "true"
 BOT_TOKEN        = os.getenv("BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -34,39 +50,32 @@ os.makedirs(DATA_DIR, exist_ok=True)
 
 IST = ZoneInfo("Asia/Kolkata")
 
-# Silence yfinance noise (delisted warnings, rate limit messages)
-import logging as _logging
-_logging.getLogger("yfinance").setLevel(_logging.CRITICAL)
-_logging.getLogger("peewee").setLevel(_logging.CRITICAL)
-
-# ══════════════════════════════════════════════════════════════════
-# LIVE-EDITABLE STRATEGY PARAMETERS
-# ══════════════════════════════════════════════════════════════════
+# ======================================================
+# STRATEGY PARAMETERS (live-editable)
+# ======================================================
 PARAM_DEFAULTS = {
-    # Consolidation-breakout strategy params
-    "min_consol_candles": 3,      # min consecutive candles above EMA20 for consolidation
-    "max_consol_rng":     0.015,  # 1.5% — max range of entire consolidation (HH-LL)/LL
-    "fixed_sl_pct":       0.02,   # 2% fixed SL below entry
-    "max_sl_pct":         0.05,   # skip trade if SL still wider than this after rule
-    # Exit / position sizing
-    "be_trigger_r":   1.0,
-    "target_2r":      2.0,
-    "target_3r":      3.0,
-    "max_hold_days":  40,
-    "risk_per_trade": 0.02,
-    "initial_cash":   100000,
-    "brokerage":      0.001,
-    # Live scanner
-    "lookback_days":  30,
-    # kept for backward compat (not used in new strategy)
-    "ema_proximity":  0.005,
-    "max_candle_rng": 0.010,
+    "min_move_pct":    0.15,   # min rally before consolidation (15%)
+    "max_down_day":    0.03,   # max single-day drop during rally (3%)
+    "min_move_days":   3,      # min days in the rally leg
+    "min_consol_days": 3,      # min consolidation candles
+    "max_consol_days": 20,     # max consolidation candles
+    "box_tight":       0.002,  # 0.2% -- high-band and low-band tightness
+    "breakout_pct":    0.01,   # 1% above box high for Entry B
+    "max_sl_pct":      0.06,   # max SL as % of entry
+    "be_trigger_r":    1.0,
+    "target_2r":       2.0,
+    "target_3r":       3.0,
+    "max_hold_days":   30,
+    "risk_per_trade":  0.02,
+    "initial_cash":    100000,
+    "brokerage":       0.001,
+    "lookback_days":   60,
 }
 params = dict(PARAM_DEFAULTS)
 
-# ══════════════════════════════════════════════════════════════════
+# ======================================================
 # F&O TICKERS
-# ══════════════════════════════════════════════════════════════════
+# ======================================================
 TICKERS = [
     "AARTIIND.NS","ABB.NS","ABBOTINDIA.NS","ABCAPITAL.NS","ABFRL.NS",
     "ACC.NS","ADANIENT.NS","ADANIPORTS.NS","ALKEM.NS","AMBUJACEM.NS",
@@ -78,7 +87,8 @@ TICKERS = [
     "BRITANNIA.NS","BSOFT.NS","CANBK.NS","CANFINHOME.NS","CDSL.NS",
     "CESC.NS","CHOLAFIN.NS","CIPLA.NS","COALINDIA.NS","COFORGE.NS",
     "COLPAL.NS","CONCOR.NS","COROMANDEL.NS","CROMPTON.NS","CUB.NS",
-    "CUMMINSIND.NS","DABUR.NS","DALBHARAT.NS","DEEPAKNTR.NS","DIVISLAB.NS","DIXON.NS","DLF.NS","DRREDDY.NS","EICHERMOT.NS",
+    "CUMMINSIND.NS","DABUR.NS","DALBHARAT.NS","DEEPAKNTR.NS","DELTACORP.NS",
+    "DIVISLAB.NS","DIXON.NS","DLF.NS","DRREDDY.NS","EICHERMOT.NS",
     "ESCORTS.NS","EXIDEIND.NS","FEDERALBNK.NS","GAIL.NS",
     "GLENMARK.NS","GMRINFRA.NS","GNFC.NS","GODREJCP.NS","GODREJPROP.NS",
     "GRANULES.NS","GRASIM.NS","GUJGASLTD.NS","HAL.NS","HAVELLS.NS",
@@ -96,42 +106,34 @@ TICKERS = [
     "NATIONALUM.NS","NAVINFLUOR.NS","NESTLEIND.NS",
     "NMDC.NS","NTPC.NS","OBEROIRLTY.NS","OFSS.NS","ONGC.NS","PAGEIND.NS",
     "PERSISTENT.NS","PETRONET.NS","PFC.NS","PIIND.NS","PNB.NS",
-    "POLYCAB.NS","POWERGRID.NS","RAMCOCEM.NS",
+    "POLYCAB.NS","POWERGRID.NS","PVRINOX.NS","RAMCOCEM.NS",
     "RECLTD.NS","RELIANCE.NS","SAIL.NS","SBICARD.NS","SBILIFE.NS",
     "SBIN.NS","SHREECEM.NS","SHRIRAMFIN.NS","SIEMENS.NS","SRF.NS",
-    "SUNPHARMA.NS","SUNTV.NS","SUPREMEIND.NS","SYNGENE.NS","TATACONSUM.NS","TATAMOTORS.NS","TATAPOWER.NS","TATASTEEL.NS","TCS.NS",
+    "SUNPHARMA.NS","SUNTV.NS","SUPREMEIND.NS","SYNGENE.NS","TATACOMM.NS",
+    "TATACONSUM.NS","TATAMOTORS.NS","TATAPOWER.NS","TATASTEEL.NS","TCS.NS",
     "TECHM.NS","TITAN.NS","TORNTPHARM.NS","TORNTPOWER.NS","TRENT.NS",
     "TRIDENT.NS","TVSMOTOR.NS","UBL.NS","ULTRACEMCO.NS",
     "UPL.NS","VEDL.NS","VOLTAS.NS","WIPRO.NS",
     "ZEEL.NS","ZYDUSLIFE.NS",
 ]
 
-# ══════════════════════════════════════════════════════════════════
+# ======================================================
 # SCANNER STATE
-# ══════════════════════════════════════════════════════════════════
+# ======================================================
 _lock = threading.Lock()
 
 state = {
     "status": "idle", "scan_running": False, "auto_schedule": True,
     "current_ticker": "", "scanned": 0, "total": len(TICKERS),
-    "signals_today": {}, "scan_log": [], "scan_number": 0,
+    "watchlist_today": {},
+    "breakouts_today": {},
+    "scan_log": [], "scan_number": 0,
     "last_scan_time": None, "next_scan_time": None, "scan_start_ts": None,
 }
 
 bt_state = {
-    "running": False, "progress": 0, "total": 3,
+    "running": False, "progress": 0, "total": 7,
     "current": "", "result": None, "error": None,
-    "mode": "single",          # "single" | "full"
-}
-
-# Full F&O scan backtest state
-scan_bt_state = {
-    "running":  False,
-    "progress": 0,          # stocks completed
-    "total":    len(TICKERS),
-    "current":  "",
-    "result":   None,
-    "error":    None,
 }
 
 SCAN_TIMES = [
@@ -157,821 +159,729 @@ def is_market_open():
 def _next_scan_str():
     now_t = ist_now().strftime("%H:%M")
     future = [t for t in SCAN_TIMES if t > now_t]
-    return future[0] if future else "—"
+    return future[0] if future else "x"
 
 
-# ══════════════════════════════════════════════════════════════════
-# LIVE SCANNER CORE
-# ══════════════════════════════════════════════════════════════════
+# ======================================================
+# CORE STRATEGY DETECTION
+# ======================================================
+
+def _compute_emas(df):
+    df = df.copy()
+    df["EMA9"]  = df["Close"].ewm(span=9,  adjust=False).mean()
+    df["EMA20"] = df["Close"].ewm(span=20, adjust=False).mean()
+    return df
+
+
+def _find_rally_ending_at(df, end_idx, p):
+    """
+    Walk backwards from end_idx to find start of continuous upward rally.
+    Criteria: no single day drops more than max_down_day%.
+    Returns (start_idx, move_pct) or None.
+    """
+    max_down = float(p["max_down_day"])
+    min_move = float(p["min_move_pct"])
+    min_days = int(p["min_move_days"])
+
+    i = end_idx
+    while i > 0:
+        cur  = float(df.iloc[i]["Close"])
+        prev = float(df.iloc[i - 1]["Close"])
+        daily_ret = (cur - prev) / prev
+        if daily_ret < -max_down:
+            break
+        i -= 1
+
+    rally_start = i
+    rally_len   = end_idx - rally_start
+    if rally_len < min_days:
+        return None
+
+    start_close = float(df.iloc[rally_start]["Close"])
+    end_close   = float(df.iloc[end_idx]["Close"])
+    move_pct    = (end_close - start_close) / start_close
+    if move_pct < min_move:
+        return None
+
+    return rally_start, round(move_pct * 100, 2)
+
+
+def _check_consolidation(df, from_idx, p):
+    """
+    Starting from from_idx, check if candles form a tight box.
+    High range <= box_tight AND Low range <= box_tight.
+    Returns (end_idx, box_high, box_low) for the longest valid run, or None.
+    """
+    tight   = float(p["box_tight"])
+    min_c   = int(p["min_consol_days"])
+    max_c   = int(p["max_consol_days"])
+
+    if from_idx >= len(df):
+        return None
+
+    highs = []
+    lows  = []
+    valid_end = None
+
+    for j in range(from_idx, min(from_idx + max_c, len(df))):
+        highs.append(float(df.iloc[j]["High"]))
+        lows.append(float(df.iloc[j]["Low"]))
+
+        bh = max(highs); bl_h = min(highs)
+        bl = min(lows);  bh_l = max(lows)
+
+        high_spread = (bh - bl_h) / bl_h if bl_h > 0 else 1
+        low_spread  = (bh_l - bl)  / bl  if bl  > 0 else 1
+
+        if high_spread <= tight and low_spread <= tight:
+            if len(highs) >= min_c:
+                valid_end = j
+        else:
+            # box broke -- stop here
+            break
+
+    if valid_end is None:
+        return None
+
+    bh = max(df.iloc[from_idx:valid_end + 1]["High"].tolist())
+    bl = min(df.iloc[from_idx:valid_end + 1]["Low"].tolist())
+
+    # Box must be above EMA20
+    avg_ema20 = df["EMA20"].iloc[from_idx:valid_end + 1].mean()
+    if float(bl) <= float(avg_ema20):
+        return None
+
+    return valid_end, round(float(bh), 2), round(float(bl), 2)
+
+
+def detect_setups_all(df, p):
+    """
+    Find all valid box setups in df. Returns list of setup dicts.
+    """
+    df    = _compute_emas(df)
+    found = []
+    i     = int(p["min_move_days"])
+
+    while i < len(df) - int(p["min_consol_days"]):
+        rally = _find_rally_ending_at(df, i, p)
+        if rally is None:
+            i += 1
+            continue
+
+        rs, move_pct = rally
+
+        # EMA9 > EMA20 at rally peak
+        if float(df.iloc[i]["EMA9"]) <= float(df.iloc[i]["EMA20"]):
+            i += 1
+            continue
+
+        consol = _check_consolidation(df, i + 1, p)
+        if consol is None:
+            i += 1
+            continue
+
+        ce, box_high, box_low = consol
+        cs = i + 1
+
+        setup = {
+            "rally_start_idx":  rs,
+            "rally_end_idx":    i,
+            "consol_start_idx": cs,
+            "consol_end_idx":   ce,
+            "box_high":  box_high,
+            "box_low":   box_low,
+            "move_pct":  move_pct,
+            "consol_days": ce - cs + 1,
+            "ema9":  round(float(df.iloc[ce]["EMA9"]),  2),
+            "ema20": round(float(df.iloc[ce]["EMA20"]), 2),
+            "rally_start_date":  df.index[rs].strftime("%Y-%m-%d"),
+            "rally_end_date":    df.index[i].strftime("%Y-%m-%d"),
+            "consol_start_date": df.index[cs].strftime("%Y-%m-%d"),
+            "consol_end_date":   df.index[ce].strftime("%Y-%m-%d"),
+        }
+        found.append(setup)
+        i = ce + 1  # skip past this box
+
+    return found
+
+
+def detect_live_signal(df, p):
+    """
+    For live scanning: check last few candles for watchlist or breakout.
+    Returns (alert_type, setup_dict) or (None, None).
+    """
+    setups = detect_setups_all(df, p)
+    if not setups:
+        return None, None
+
+    # Look at most recent setup
+    setup = setups[-1]
+    ce    = setup["consol_end_idx"]
+    last  = len(df) - 1
+
+    if ce == last:
+        # Still in box -- watchlist
+        setup["alert_type"] = "watchlist"
+        setup["live_price"] = round(float(df.iloc[last]["Close"]), 2)
+        return "watchlist", setup
+
+    elif ce == last - 1:
+        # Box ended yesterday, check if today broke out
+        today_close = float(df.iloc[last]["Close"])
+        if today_close > setup["box_high"]:
+            setup["alert_type"] = "breakout"
+            setup["live_price"] = round(today_close, 2)
+            setup["breakout_entry_eod"] = round(today_close, 2)
+            sl  = setup["box_low"]
+            rpu = today_close - sl
+            if rpu > 0 and rpu / today_close <= float(p["max_sl_pct"]):
+                setup["stop_loss"] = round(sl, 2)
+                setup["sl_pct"]    = round(rpu / today_close * 100, 2)
+                setup["target_2r"] = round(today_close + 2 * rpu, 2)
+                setup["target_3r"] = round(today_close + 3 * rpu, 2)
+            return "breakout", setup
+
+    return None, None
+
+
+# ======================================================
+# CHART GENERATION
+# ======================================================
+
+def _make_setup_chart(df, setup, ticker, entry_price=None,
+                      exit_price=None, exit_label=None, title_suffix=""):
+    rs  = setup["rally_start_idx"]
+    ce  = setup["consol_end_idx"]
+    bh  = setup["box_high"]
+    bl  = setup["box_low"]
+
+    plot_start = max(0, rs - 3)
+    plot_end   = min(len(df), ce + 10)
+    plot_df    = df.iloc[plot_start:plot_end][["Open","High","Low","Close","Volume"]].copy()
+
+    mc = mpf.make_marketcolors(
+        up="#22c55e", down="#ef4444",
+        wick={"up":"#22c55e","down":"#ef4444"},
+        edge={"up":"#22c55e","down":"#ef4444"},
+        volume={"up":"#22c55e55","down":"#ef444455"})
+    s = mpf.make_mpf_style(
+        marketcolors=mc, base_mpf_style="nightclouds",
+        gridstyle="--", gridcolor="#334155",
+        facecolor="#0f172a", figcolor="#0f172a",
+        rc={"axes.labelcolor":"#94a3b8","xtick.color":"#94a3b8","ytick.color":"#94a3b8"})
+
+    # EMA lines
+    ema9_s  = pd.Series(
+        [df.loc[d,"EMA9"]  if d in df.index else np.nan for d in plot_df.index],
+        index=plot_df.index)
+    ema20_s = pd.Series(
+        [df.loc[d,"EMA20"] if d in df.index else np.nan for d in plot_df.index],
+        index=plot_df.index)
+    add = [
+        mpf.make_addplot(ema9_s,  color="#38bdf8", width=1.2),
+        mpf.make_addplot(ema20_s, color="#a855f7", width=1.2),
+    ]
+
+    hlines_p = [bh, bl]
+    hlines_c = ["#f59e0b","#f59e0b"]
+    hlines_ls= ["--","--"]
+    hlines_lw= [1.5, 1.5]
+    if entry_price:
+        hlines_p.append(entry_price); hlines_c.append("#22c55e")
+        hlines_ls.append("-");        hlines_lw.append(1.0)
+    if exit_price:
+        hlines_p.append(exit_price); hlines_c.append("#ef4444")
+        hlines_ls.append("-");       hlines_lw.append(1.0)
+
+    title = f"{ticker}  Box Breakout  {title_suffix}"
+    fig, axes = mpf.plot(
+        plot_df, type="candle", style=s, title=title,
+        volume=True, addplot=add,
+        hlines=dict(hlines=hlines_p, colors=hlines_c,
+                    linestyle=hlines_ls, linewidths=hlines_lw),
+        returnfig=True, figsize=(12, 7), tight_layout=True)
+
+    ax = axes[0]
+    cs_local = setup["consol_start_idx"] - plot_start
+    ce_local = setup["consol_end_idx"]   - plot_start
+    ax.axvspan(cs_local - 0.5, ce_local + 0.5,
+               alpha=0.12, color="#f59e0b", zorder=0)
+    ax.annotate(
+        f"+{setup['move_pct']}%",
+        xy=(setup["rally_end_idx"] - plot_start, bh * 1.005),
+        color="#f59e0b", fontsize=9, fontweight="bold")
+
+    if entry_price:
+        ax.annotate(f"Entry {entry_price}",
+                    xy=(ce_local + 1, entry_price),
+                    color="#22c55e", fontsize=8)
+    if exit_price and exit_label:
+        ax.annotate(f"{exit_label} {exit_price}",
+                    xy=(ce_local + 3, exit_price),
+                    color="#ef4444", fontsize=8)
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120, bbox_inches="tight", facecolor="#0f172a")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+def _make_equity_chart(results_by_key, ticker, start, end, init_cap):
+    fig, ax = plt.subplots(figsize=(12, 5), facecolor="#0f172a")
+    ax.set_facecolor("#0f172a")
+    colors = {
+        ("EOD",  "2R"):"#22c55e", ("EOD",  "3R"):"#16a34a", ("EOD",  "EMA9"):"#4ade80",
+        ("BREAK","2R"):"#3b82f6", ("BREAK","3R"):"#2563eb", ("BREAK","EMA9"):"#60a5fa",
+    }
+    for key, trades in results_by_key.items():
+        if not trades: continue
+        caps = [init_cap] + [t["Capital"] for t in trades]
+        et, em = key
+        ax.plot(caps, label=f"{et}/{em}", color=colors.get(key,"#fff"), linewidth=1.5)
+
+    ax.set_title(f"{ticker} -- Equity Curves ({start} to {end})",
+                 color="#f1f5f9", fontsize=12)
+    ax.set_xlabel("Trade #", color="#94a3b8")
+    ax.set_ylabel("Capital", color="#94a3b8")
+    ax.tick_params(colors="#94a3b8")
+    ax.legend(facecolor="#1e293b", labelcolor="#f1f5f9", fontsize=9)
+    ax.grid(True, color="#334155", linestyle="--", linewidth=0.5)
+    for sp in ax.spines.values(): sp.set_edgecolor("#334155")
+
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120, bbox_inches="tight", facecolor="#0f172a")
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+# ======================================================
+# TELEGRAM
+# ======================================================
+
+def _send_telegram(msg):
+    if not TELEGRAM_ENABLED or not BOT_TOKEN: return
+    try:
+        req.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                 json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"},
+                 timeout=10)
+    except Exception: pass
+
+
+def _send_telegram_photo(png_bytes, caption=""):
+    if not TELEGRAM_ENABLED or not BOT_TOKEN: return
+    try:
+        req.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendPhoto",
+            data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption, "parse_mode": "HTML"},
+            files={"photo": ("chart.png", png_bytes, "image/png")},
+            timeout=30)
+    except Exception: pass
+
+
+def _send_telegram_doc(file_bytes, filename, caption=""):
+    if not TELEGRAM_ENABLED or not BOT_TOKEN: return
+    try:
+        req.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
+            data={"chat_id": TELEGRAM_CHAT_ID, "caption": caption},
+            files={"document": (filename, file_bytes, "text/csv")},
+            timeout=30)
+    except Exception: pass
+
+
+def _send_watchlist_alert(ticker, sig, df):
+    short = ticker.replace(".NS","")
+    _send_telegram(
+        f"👀 <b>WATCHLIST -- {short}</b>\n"
+        f"Box forming since {sig['consol_start_date']} ({sig['consol_days']} days)\n\n"
+        f"📈 Rally: +{sig['move_pct']}% from {sig['rally_start_date']}\n"
+        f"📦 Box High: {sig['box_high']}  |  Box Low: {sig['box_low']}\n"
+        f"💹 Live: {sig['live_price']}\n"
+        f"<i>EMA9: {sig['ema9']}  EMA20: {sig['ema20']}</i>")
+    try:
+        chart = _make_setup_chart(df, sig, short)
+        _send_telegram_photo(chart, caption=f"👀 {short} - Watchlist Box")
+    except Exception: pass
+
+
+def _send_breakout_alert(ticker, sig, df):
+    short = ticker.replace(".NS","")
+    sl_txt = ""
+    if "stop_loss" in sig:
+        sl_txt = (f"🔴 SL: {sig['stop_loss']} ({sig['sl_pct']}%)\n"
+                  f"🎯 2R: {sig['target_2r']}  |  3R: {sig['target_3r']}\n")
+    _send_telegram(
+        f"🚨 <b>BREAKOUT -- {short}</b>\n"
+        f"{ist_now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+        f"📦 Box High: {sig['box_high']} (BROKEN)\n"
+        f"🟢 EOD Entry: {sig.get('breakout_entry_eod','--')}\n"
+        f"{sl_txt}"
+        f"💹 Live: {sig['live_price']}\n"
+        f"<i>EMA9: {sig['ema9']}  EMA20: {sig['ema20']}</i>")
+    try:
+        chart = _make_setup_chart(df, sig, short,
+                                  entry_price=sig.get("breakout_entry_eod"),
+                                  exit_price=sig.get("target_2r"), exit_label="2R")
+        _send_telegram_photo(chart, caption=f"🚨 {short} - Breakout!")
+    except Exception: pass
+
+
+# ======================================================
+# LIVE SCANNER
+# ======================================================
 
 def fetch_and_check(ticker):
-    short = ticker.replace(".NS","").replace(".BO","")
-    if short in state["signals_today"]:
-        return None
     try:
-        import logging
-        logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+        df = yf.download(ticker, period=f"{int(params['lookback_days'])}d",
+                         interval="1d", auto_adjust=True, progress=False)
+        if df.empty or len(df) < 15: return None, None
+        df.dropna(inplace=True)
+        df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
 
-        # Use Ticker.history() — more reliable on cloud deployments
-        _t = yf.Ticker(ticker)
-        hist = _t.history(period=f"{int(params['lookback_days'])}d",
-                          interval="1d", auto_adjust=True, actions=False)
-        if hist is None or hist.empty or len(hist) < 10:
-            # fallback to download()
-            hist = yf.download(ticker, period=f"{int(params['lookback_days'])}d",
-                               interval="1d", auto_adjust=True, progress=False, threads=False)
-        if hist is None or hist.empty or len(hist) < 10:
-            return None
-        hist.dropna(inplace=True)
-        if isinstance(hist.columns, pd.MultiIndex):
-            hist.columns = [c[0] for c in hist.columns]
-        else:
-            hist.columns = [c[0] if isinstance(c, tuple) else c for c in hist.columns]
-        # Remove timezone from index if present
-        if hasattr(hist.index, 'tz') and hist.index.tz is not None:
-            hist.index = hist.index.tz_localize(None)
+        live_raw = yf.download(ticker, period="1d", interval="1m",
+                               auto_adjust=True, progress=False)
+        if not live_raw.empty:
+            live_raw.columns = [c[0] if isinstance(c, tuple) else c for c in live_raw.columns]
+            today_row = pd.DataFrame([{
+                "Open":   float(live_raw["Open"].iloc[0]),
+                "High":   float(live_raw["High"].max()),
+                "Low":    float(live_raw["Low"].min()),
+                "Close":  float(live_raw["Close"].iloc[-1]),
+                "Volume": float(live_raw["Volume"].sum()),
+            }], index=[pd.Timestamp(date.today())])
+            if df.index[-1].date() == date.today():
+                df = df.iloc[:-1]
+            df = pd.concat([df, today_row])
 
-        live_raw = _t.history(period="1d", interval="1m", auto_adjust=True, actions=False)
-        if live_raw is None or live_raw.empty:
-            live_raw = yf.download(ticker, period="1d", interval="1m",
-                                   auto_adjust=True, progress=False, threads=False)
-        if live_raw.empty:
-            return None
-        live_raw.columns = [c[0] if isinstance(c, tuple) else c for c in live_raw.columns]
-
-        today_row = pd.DataFrame([{
-            "Open": float(live_raw["Open"].iloc[0]),
-            "High": float(live_raw["High"].max()),
-            "Low":  float(live_raw["Low"].min()),
-            "Close":float(live_raw["Close"].iloc[-1]),
-            "Volume":float(live_raw["Volume"].sum()),
-        }], index=[pd.Timestamp(date.today())])
-
-        if hist.index[-1].date() == date.today():
-            hist = hist.iloc[:-1]
-        df = pd.concat([hist, today_row]).copy()
-
-        df["EMA9"]  = df["Close"].ewm(span=9,  adjust=False).mean()
-        df["EMA20"] = df["Close"].ewm(span=20, adjust=False).mean()
-
-        # ── Consolidation-breakout signal on today's candle ──────────
-        row   = df.iloc[-1]
-        ema9  = float(row["EMA9"]); ema20 = float(row["EMA20"])
-
-        # Uptrend
-        if ema9 < ema20: return None
-
-        # Consolidation must exist in candles before today
-        consol = _find_consolidation(df, len(df) - 1, params)
-        if consol is None: return None
-
-        c_start, c_end, c_high, c_low = consol
-        b_open  = float(row["Open"])
-        b_close = float(row["Close"])
-        b_high  = float(row["High"])
-        b_low   = float(row["Low"])
-
-        # Breakout candle checks (same as backtest)
-        if b_close <= b_open:   return None   # must be bullish
-        if b_close <= c_high:   return None   # must close above consol high
-        if b_high  <= c_high:   return None   # high must break consol
-        if b_open  <= ema20:    return None   # open above EMA20
-        if b_low   <= ema20:    return None   # low above EMA20 (whole candle above)
-
-        entry_price = round(c_high, 2)
-        sl_fixed    = round(entry_price * (1 - params.get("fixed_sl_pct", 0.02)), 2)
-        stop_loss   = round(max(sl_fixed, b_low), 2)
-
-        rpu = entry_price - stop_loss
-        if rpu <= 0 or rpu / entry_price > params.get("max_sl_pct", 0.05): return None
-
-        sl_pct = round(rpu / entry_price * 100, 2)
-        return {
-            "ticker":       short,
-            "timestamp":    ist_now().strftime("%Y-%m-%d %H:%M:%S"),
-            "live_price":   round(b_close, 2),
-            "entry":        entry_price,
-            "stop_loss":    stop_loss,
-            "sl_pct":       sl_pct,
-            "target_2r":    round(entry_price + 2 * rpu, 2),
-            "target_3r":    round(entry_price + 3 * rpu, 2),
-            "ema9":         round(ema9, 2),
-            "ema20":        round(ema20, 2),
-            "consol_high":  round(c_high, 2),
-            "consol_low":   round(c_low, 2),
-        }
-    except Exception as e:
-        err = str(e).lower()
-        if any(x in err for x in ["delisted","no timezone","tzmissing","yftzmissing"]):
-            pass  # silently skip delisted tickers
-        return None
+        df = _compute_emas(df)
+        alert_type, setup = detect_live_signal(df, params)
+        if setup is None: return None, None
+        setup["ticker"]    = ticker.replace(".NS","")
+        setup["timestamp"] = ist_now().strftime("%Y-%m-%d %H:%M:%S")
+        return setup, df
+    except Exception:
+        return None, None
 
 
 def run_scan(manual=False):
     with _lock:
-        if state["scan_running"]:
-            return
+        if state["scan_running"]: return
         state.update({"scan_running": True, "status": "scanning",
                       "scanned": 0, "current_ticker": "",
                       "scan_start_ts": ist_now().strftime("%Y-%m-%d %H:%M:%S")})
         state["scan_number"] += 1
 
-    total = len(TICKERS); found = []; num = state["scan_number"]; t0 = time.time()
+    total = len(TICKERS)
+    new_watchlist = []; new_breakouts = []
+    num = state["scan_number"]; t0 = time.time()
 
     for i, ticker in enumerate(TICKERS, 1):
         short = ticker.replace(".NS","")
         with _lock:
             state["scanned"] = i; state["current_ticker"] = short
-        sig = fetch_and_check(ticker)
+
+        sig, df = fetch_and_check(ticker)
         if sig:
-            found.append(sig)
-            with _lock: state["signals_today"][short] = sig
-            _persist_signal(sig); _send_telegram_signal(sig)
+            atype = sig["alert_type"]
+            if atype == "watchlist":
+                already = short in state["watchlist_today"]
+                with _lock: state["watchlist_today"][short] = sig
+                if not already:
+                    new_watchlist.append((ticker, sig, df))
+                    _persist_signal(sig, "watchlist")
+            elif atype == "breakout":
+                already = short in state["breakouts_today"]
+                with _lock: state["breakouts_today"][short] = sig
+                if not already:
+                    new_breakouts.append((ticker, sig, df))
+                    _persist_signal(sig, "breakout")
         time.sleep(0.15)
 
-    elapsed = round(time.time() - t0, 1)
-    summary = {"scan_number": num, "time": ist_now().strftime("%H:%M:%S"),
-               "date": ist_now().strftime("%Y-%m-%d"),
-               "type": "manual" if manual else "auto",
-               "total_stocks": total, "signals_found": len(found),
-               "elapsed_sec": elapsed, "tickers_found": [s["ticker"] for s in found]}
+    for ticker, sig, df in new_watchlist:
+        _send_watchlist_alert(ticker, sig, df)
+    for ticker, sig, df in new_breakouts:
+        _send_breakout_alert(ticker, sig, df)
 
+    elapsed = round(time.time() - t0, 1)
+    summary = {
+        "scan_number": num, "time": ist_now().strftime("%H:%M:%S"),
+        "date": ist_now().strftime("%Y-%m-%d"),
+        "type": "manual" if manual else "auto",
+        "total_stocks": total,
+        "watchlist_found": len(new_watchlist),
+        "breakouts_found": len(new_breakouts),
+        "elapsed_sec": elapsed,
+    }
     with _lock:
         state.update({"scan_running": False, "status": "idle",
                       "last_scan_time": ist_now().strftime("%H:%M:%S"),
                       "next_scan_time": _next_scan_str()})
-        state["scan_log"].insert(0, summary); state["scan_log"] = state["scan_log"][:50]
-
+        state["scan_log"].insert(0, summary)
+        state["scan_log"] = state["scan_log"][:50]
     _persist_scan_log(summary)
-    if TELEGRAM_ENABLED and len(found) > 1:
-        _send_telegram(f"📋 <b>Scan #{num}</b> — {ist_now().strftime('%H:%M')} IST\n"
-                       f"<b>{len(found)}</b> signals across {total} F&O stocks.")
 
 
 def _bg_scan(manual=False):
     threading.Thread(target=run_scan, args=(manual,), daemon=True).start()
 
 
-# ══════════════════════════════════════════════════════════════════
+# ======================================================
 # BACKTEST ENGINE
-# ══════════════════════════════════════════════════════════════════
+# ======================================================
 
-def _fetch_ohlcv(ticker, start_date, end_date):
-    """
-    Fetch daily OHLCV using Ticker.history() — more reliable on cloud than yf.download().
-    Falls back to yf.download() if history() fails.
-    Returns clean DataFrame with columns [Open,High,Low,Close,Volume] or None.
-    """
-    import logging
-    logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+def _bt_fetch(ticker, start_date, end_date):
+    warmup = (pd.Timestamp(start_date) - pd.Timedelta(days=120)).strftime("%Y-%m-%d")
+    df = yf.download(ticker, start=warmup, end=end_date,
+                     interval="1d", auto_adjust=True, progress=False)
+    if df.empty or len(df) < 20: return None
+    df.dropna(inplace=True)
+    df.columns = [c[0] if isinstance(c, tuple) else c for c in df.columns]
+    return _compute_emas(df)
 
-    def _clean(raw):
-        """Flatten MultiIndex, keep OHLCV, drop NaN rows."""
-        if raw is None or raw.empty:
-            return None
-        if isinstance(raw.columns, pd.MultiIndex):
-            raw.columns = [c[0] for c in raw.columns]
+
+def _bt_simulate(setups, df, entry_type, exit_mode, p):
+    """
+    entry_type: EOD   -- entry = close of breakout day
+                BREAK -- entry = box_high * (1 + breakout_pct) if hit same day
+    exit_mode:  2R | 3R | EMA9
+    """
+    trades  = []
+    capital = float(p["initial_cash"])
+    used_til = -1
+
+    for setup in setups:
+        ce       = setup["consol_end_idx"]
+        box_high = setup["box_high"]
+        box_low  = setup["box_low"]
+
+        # Find first breakout day after box
+        breakout_idx = None
+        for k in range(ce + 1, min(ce + 5, len(df))):
+            if float(df.iloc[k]["Close"]) > box_high:
+                breakout_idx = k; break
+
+        if breakout_idx is None or breakout_idx <= used_til:
+            continue
+
+        brk_close = float(df.iloc[breakout_idx]["Close"])
+        brk_high  = float(df.iloc[breakout_idx]["High"])
+
+        if entry_type == "EOD":
+            entry = round(brk_close, 2)
         else:
-            raw.columns = [str(c[0]) if isinstance(c, tuple) else str(c) for c in raw.columns]
-        needed = [c for c in ["Open","High","Low","Close","Volume"] if c in raw.columns]
-        if not all(c in needed for c in ["Open","High","Low","Close"]):
-            return None
-        df = raw[needed].copy()
-        df.dropna(subset=["Open","High","Low","Close"], inplace=True)
-        df.index = pd.to_datetime(df.index).tz_localize(None)
-        df = df[(df.index >= pd.Timestamp(start_date)) &
-                (df.index <= pd.Timestamp(end_date))]
-        return df if len(df) >= 10 else None
-
-    # ── Method 1: Ticker.history() — uses different Yahoo endpoint ──
-    try:
-        t   = yf.Ticker(ticker)
-        raw = t.history(start=start_date, end=end_date,
-                        interval="1d", auto_adjust=True, actions=False)
-        df  = _clean(raw)
-        if df is not None:
-            print(f"[BT] {ticker}: history() ✅ {len(df)} rows", flush=True)
-            return df
-        print(f"[BT] {ticker}: history() returned empty", flush=True)
-    except Exception as e:
-        print(f"[BT] {ticker}: history() error: {e}", flush=True)
-        if any(x in str(e).lower() for x in ["delisted","no timezone","tzmissing","yftzmissing"]):
-            return None
-
-    time.sleep(0.5)
-
-    # ── Method 2: yf.download() fallback ────────────────────────────
-    try:
-        raw = yf.download(ticker, start=start_date, end=end_date,
-                          interval="1d", auto_adjust=True, progress=False,
-                          threads=False)
-        df  = _clean(raw)
-        if df is not None:
-            print(f"[BT] {ticker}: download() ✅ {len(df)} rows", flush=True)
-            return df
-        print(f"[BT] {ticker}: download() returned empty", flush=True)
-    except Exception as e:
-        print(f"[BT] {ticker}: download() error: {e}", flush=True)
-
-    time.sleep(0.5)
-
-    # ── Method 3: Manual Yahoo Finance v8 API call ───────────────────
-    try:
-        import requests as _req
-        import datetime as _dt
-        p1 = int(pd.Timestamp(start_date).timestamp())
-        p2 = int(pd.Timestamp(end_date).timestamp())
-        sym = ticker.replace(".NS", "") + ".NS"
-        url = (f"https://query2.finance.yahoo.com/v8/finance/chart/{sym}"
-               f"?period1={p1}&period2={p2}&interval=1d&events=history")
-        headers = {
-            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                           "AppleWebKit/537.36 (KHTML, like Gecko) "
-                           "Chrome/120.0.0.0 Safari/537.36"),
-            "Accept": "application/json",
-        }
-        r = _req.get(url, headers=headers, timeout=15)
-        print(f"[BT] {ticker}: v8 API status={r.status_code}", flush=True)
-        if r.status_code == 200:
-            j      = r.json()
-            result = j.get("chart", {}).get("result", [])
-            if result:
-                ts     = result[0]["timestamp"]
-                q      = result[0]["indicators"]["quote"][0]
-                adjc   = result[0]["indicators"].get("adjclose", [{}])[0].get("adjclose", q["close"])
-                dates  = pd.to_datetime(ts, unit="s").tz_localize("UTC").tz_convert("Asia/Kolkata").tz_localize(None).normalize()
-                raw2   = pd.DataFrame({
-                    "Open":   q["open"],  "High":  q["high"],
-                    "Low":    q["low"],   "Close": adjc,
-                    "Volume": q["volume"],
-                }, index=dates)
-                df = _clean(raw2)
-                if df is not None:
-                    print(f"[BT] {ticker}: v8 API ✅ {len(df)} rows", flush=True)
-                    return df
-        print(f"[BT] {ticker}: v8 API returned no usable data", flush=True)
-    except Exception as e:
-        print(f"[BT] {ticker}: v8 API error: {e}", flush=True)
-
-    print(f"[BT] {ticker}: ❌ all methods failed", flush=True)
-    return None
-
-
-def _bt_prepare(ticker, start_date, end_date, p):
-    warmup = (pd.Timestamp(start_date) - pd.Timedelta(days=90)).strftime("%Y-%m-%d")
-    df = _fetch_ohlcv(ticker, warmup, end_date)
-    if df is None:
-        return None
-
-    df["EMA9"]  = df["Close"].ewm(span=9,  adjust=False).mean()
-    df["EMA20"] = df["Close"].ewm(span=20, adjust=False).mean()
-    return df
-
-
-def _find_consolidation(df, breakout_idx, p):
-    """
-    Looks BACKWARD from breakout_idx (exclusive) to find a valid consolidation.
-
-    Rules:
-    - Each consolidation candle must CLOSE above EMA20
-    - The ENTIRE consolidation range: (max_high - min_low) / min_low <= 1.5%
-    - Minimum 3 consecutive candles (configurable)
-    - The consolidation low must be near EMA20:
-        min_low of consolidation within ema_proximity % of EMA20
-        (ensures consolidation is hugging the EMA, not floating far above)
-
-    Returns (start_idx, end_idx, consol_high, consol_low) or None.
-    end_idx is the last candle of the consolidation = breakout_idx - 1.
-    """
-    min_n      = int(p.get("min_consol_candles", 3))
-    max_rng    = p.get("max_consol_rng", 0.015)       # 1.5%
-    ema_prox   = p.get("ema_proximity", 0.015)         # consol low within X% of EMA20
-
-    end_idx = breakout_idx - 1   # last candle before breakout
-    if end_idx < min_n:
-        return None
-
-    # Walk backward one candle at a time, accumulating the window
-    hi_so_far = -1.0
-    lo_so_far = float("inf")
-
-    for start in range(end_idx, max(end_idx - 30, -1), -1):
-        row   = df.iloc[start]
-        c_cl  = float(row["Close"])
-        c_hi  = float(row["High"])
-        c_lo  = float(row["Low"])
-        ema20 = float(row["EMA20"])
-
-        # Each candle must close ABOVE EMA20
-        if c_cl <= ema20:
-            break
-
-        # Expand range
-        hi_so_far = max(hi_so_far, c_hi)
-        lo_so_far = min(lo_so_far, c_lo)
-
-        if lo_so_far <= 0:
-            break
-
-        # Entire range must stay within 1.5%
-        if (hi_so_far - lo_so_far) / lo_so_far > max_rng:
-            break
-
-        n = end_idx - start + 1   # candles in window so far
-        if n >= min_n:
-            # Proximity check: consolidation low must be near EMA20
-            # (use EMA20 of the last consolidation candle as reference)
-            ema20_ref = float(df.iloc[end_idx]["EMA20"])
-            if (lo_so_far - ema20_ref) / ema20_ref > ema_prox:
-                # Consolidation is floating too far above EMA20 — not a valid setup
-                # Keep extending backward in case earlier candles are closer
+            trigger = round(box_high * (1.0 + float(p["breakout_pct"])), 2)
+            if brk_high < trigger:
                 continue
-            return (start, end_idx, round(hi_so_far, 2), round(lo_so_far, 2))
+            entry = trigger
 
-    return None
-
-
-def _bt_signals(df, start_date, p):
-    """
-    Consolidation-Breakout Strategy:
-
-    CONSOLIDATION (candles BEFORE the breakout):
-    - At least 3 consecutive candles closing above EMA20
-    - Entire range (highest high to lowest low) within 1.5%
-    - Consolidation low is near EMA20 (within ema_proximity %)
-
-    BREAKOUT CANDLE (candle i):
-    - EMA9 >= EMA20 (uptrend)
-    - Bullish: close > open
-    - Closes ABOVE consolidation high
-    - Breakout candle low and open both above EMA20
-      (entire candle completely above EMA20)
-
-    ENTRY:  consolidation high (the breakout level)
-    SL:     max(entry × (1 - 2%),  low of breakout candle)
-            → whichever is HIGHER (tighter)
-    """
-    sigs       = []
-    sd         = pd.Timestamp(start_date)
-    used_until = -1
-
-    for i in range(4, len(df)):
-        if df.index[i] < sd:
-            continue
-        if i <= used_until:
-            continue
-
-        row   = df.iloc[i]
-        ema20 = float(row["EMA20"])
-        ema9  = float(row["EMA9"])
-
-        # ── Uptrend filter ──────────────────────────────────────────
-        if ema9 < ema20:
-            continue
-
-        # ── Find valid consolidation just before this candle ────────
-        consol = _find_consolidation(df, i, p)
-        if consol is None:
-            continue
-
-        c_start, c_end, c_high, c_low = consol
-
-        # ── Breakout candle checks ───────────────────────────────────
-        b_open  = float(row["Open"])
-        b_close = float(row["Close"])
-        b_high  = float(row["High"])
-        b_low   = float(row["Low"])
-
-        # Must be bullish
-        if b_close <= b_open:
-            continue
-
-        # Must close above consolidation high
-        if b_close <= c_high:
-            continue
-
-        # High must have broken above consolidation high
-        if b_high <= c_high:
-            continue
-
-        # Entire candle must be above EMA20:
-        # open above EMA20 (candle started above), low above EMA20 (never dipped below)
-        if b_open <= ema20:
-            continue
-        if b_low <= ema20:
-            continue
-
-        # ── Entry & Stop Loss ────────────────────────────────────────
-        entry = round(c_high, 2)                         # entry at breakout level
-
-        sl_fixed  = round(entry * (1 - p.get("fixed_sl_pct", 0.02)), 2)
-        sl_candle = round(b_low, 2)
-        stop_loss = round(max(sl_fixed, sl_candle), 2)   # higher = tighter
-
-        if stop_loss >= entry:
-            continue
-
-        rpu = entry - stop_loss
-        if rpu <= 0:
-            continue
-        if rpu / entry > p.get("max_sl_pct", 0.05):     # skip if SL too wide
-            continue
-
-        sigs.append({
-            "date":         df.index[i],
-            "idx":          i,
-            "entry_price":  entry,
-            "stop_loss":    stop_loss,
-            "consol_high":  c_high,
-            "consol_low":   c_low,
-            "consol_start": c_start,
-            "consol_end":   c_end,
-        })
-        used_until = i   # no overlapping setups
-
-    return sigs
-
-
-def _bt_simulate(signals, df, exit_mode, p):
-    trades = []; capital = p["initial_cash"]; last_used = -1
-    for sig in signals:
-        si = sig["idx"]
-        if si <= last_used: continue
-
-        # New strategy: entry is ON the breakout candle itself
-        entry     = sig["entry_price"]
-        entry_idx = si
-        sl0       = sig["stop_loss"]
-
+        sl0 = float(box_low)
         rps = entry - sl0
-        if rps <= 0 or rps / entry > p["max_sl_pct"]: continue
-        qty = int((capital * p["risk_per_trade"]) / rps)
+        if rps <= 0 or rps / entry > float(p["max_sl_pct"]):
+            continue
+
+        qty = int((capital * float(p["risk_per_trade"])) / rps)
         if qty <= 0: continue
 
-        l1r = entry + p["be_trigger_r"] * rps
-        l2r = entry + p["target_2r"]    * rps
-        l3r = entry + p["target_3r"]    * rps
+        l1r = entry + float(p["be_trigger_r"]) * rps
+        l2r = entry + float(p["target_2r"])    * rps
+        l3r = entry + float(p["target_3r"])    * rps
         stop = sl0; be_hit = False; qty_rem = qty
-        gross = cost = 0.0; exit_date = outcome = None
-        end_idx = min(entry_idx + int(p["max_hold_days"]), len(df))
+        gross = cost = 0.0; exit_date = outcome = exit_px = None
+        end_idx = min(breakout_idx + int(p["max_hold_days"]), len(df))
 
-        for j in range(entry_idx + 1, end_idx):
-            c = df.iloc[j]
+        for j in range(breakout_idx + 1, end_idx):
+            c    = df.iloc[j]
             c_hi = float(c["High"]); c_lo = float(c["Low"])
             c_cl = float(c["Close"]); c_e9 = float(c["EMA9"])
 
             if c_lo <= stop:
-                gross += (stop - entry) * qty_rem
-                cost  += (entry + stop) * qty_rem * p["brokerage"]
-                exit_date = df.index[j]; outcome = "BE_EXIT" if be_hit else "LOSS"
+                gross  += (stop - entry) * qty_rem
+                cost   += (entry + stop) * qty_rem * float(p["brokerage"])
+                exit_px = stop; exit_date = df.index[j]
+                outcome = "BE_EXIT" if be_hit else "LOSS"
                 qty_rem = 0; break
 
             if not be_hit and c_hi >= l1r:
                 stop = entry; be_hit = True
 
             if exit_mode == "2R" and c_hi >= l2r:
-                gross += (l2r - entry) * qty_rem
-                cost  += (entry + l2r) * qty_rem * p["brokerage"]
-                exit_date = df.index[j]; outcome = "WIN_2R"; qty_rem = 0; break
+                gross  += (l2r - entry) * qty_rem
+                cost   += (entry + l2r) * qty_rem * float(p["brokerage"])
+                exit_px = l2r; exit_date = df.index[j]
+                outcome = "WIN_2R"; qty_rem = 0; break
             elif exit_mode == "3R" and c_hi >= l3r:
-                gross += (l3r - entry) * qty_rem
-                cost  += (entry + l3r) * qty_rem * p["brokerage"]
-                exit_date = df.index[j]; outcome = "WIN_3R"; qty_rem = 0; break
+                gross  += (l3r - entry) * qty_rem
+                cost   += (entry + l3r) * qty_rem * float(p["brokerage"])
+                exit_px = l3r; exit_date = df.index[j]
+                outcome = "WIN_3R"; qty_rem = 0; break
             elif exit_mode == "EMA9" and be_hit and c_cl < c_e9:
-                gross += (c_cl - entry) * qty_rem
-                cost  += (entry + c_cl) * qty_rem * p["brokerage"]
-                exit_date = df.index[j]; outcome = "EMA9_TRAIL"; qty_rem = 0; break
+                gross  += (c_cl - entry) * qty_rem
+                cost   += (entry + c_cl) * qty_rem * float(p["brokerage"])
+                exit_px = c_cl; exit_date = df.index[j]
+                outcome = "EMA9_TRAIL"; qty_rem = 0; break
 
         if qty_rem > 0:
-            px = round(float(df.iloc[end_idx - 1]["Close"]), 2)
+            px     = float(df.iloc[end_idx - 1]["Close"])
             gross += (px - entry) * qty_rem
-            cost  += (entry + px) * qty_rem * p["brokerage"]
-            exit_date = df.index[end_idx - 1]; outcome = "TIMEOUT"
+            cost  += (entry + px) * qty_rem * float(p["brokerage"])
+            exit_px = round(px, 2); exit_date = df.index[end_idx - 1]
+            outcome = "TIMEOUT"
 
         net = round(gross - cost, 2); capital += net
-        last_used = entry_idx + int(p["max_hold_days"])
-
-        # Derive exit price and R-multiple for CSV / chart
-        exit_px = round(entry + (gross / qty) if qty > 0 else entry, 2)
-        r_mult  = round((exit_px - entry) / rps, 2) if rps > 0 else 0
-
+        used_til = breakout_idx + int(p["max_hold_days"])
         trades.append({
-            "Exit_Mode":  exit_mode,
-            "Setup":      sig["date"].strftime("%Y-%m-%d"),
-            "Entry_Date": df.index[entry_idx].strftime("%Y-%m-%d"),
-            "Exit_Date":  exit_date.strftime("%Y-%m-%d") if exit_date else "",
-            "Entry_Price":entry, "Stop_Loss": sl0,
-            "Exit_Price": exit_px,
-            "R_Multiple": r_mult,
-            "Qty":        qty,
-            "Gross_PnL":  round(gross, 2),
-            "Net_PnL":    net,
-            "Capital":    round(capital, 2),
-            "Outcome":    outcome,
-            # keep old keys for backward compat
-            "Entry":      df.index[entry_idx].strftime("%Y-%m-%d"),
-            "Exit":       exit_date.strftime("%Y-%m-%d") if exit_date else "",
-            "EntryPx":    entry, "SL": sl0, "NetPnL": net,
+            "Entry_Type":     entry_type,
+            "Exit_Mode":      exit_mode,
+            "Setup_Date":     setup["consol_start_date"],
+            "Breakout_Date":  df.index[breakout_idx].strftime("%Y-%m-%d"),
+            "Exit_Date":      exit_date.strftime("%Y-%m-%d") if exit_date else "",
+            "Box_High":       box_high,
+            "Box_Low":        box_low,
+            "Entry":          entry,
+            "SL":             round(sl0, 2),
+            "Exit_Price":     round(exit_px, 2) if exit_px else "",
+            "Outcome":        outcome,
+            "NetPnL":         net,
+            "Capital":        round(capital, 2),
+            "Move_Pct":       setup["move_pct"],
+            "Consol_Days":    setup["consol_days"],
         })
+
     return trades, capital
 
 
 def _bt_metrics(trades, init_cap, final_cap):
     if not trades: return {}
-    wins   = [t for t in trades if t["NetPnL"] >  0]
+    wins   = [t for t in trades if t["NetPnL"] > 0]
     losses = [t for t in trades if t["NetPnL"] <= 0]
-    cap_c  = [init_cap] + [t["Capital"] for t in trades]
+    caps   = [init_cap] + [t["Capital"] for t in trades]
     peak = init_cap; mdd = 0
-    for c in cap_c:
+    for c in caps:
         peak = max(peak, c); mdd = max(mdd, (peak - c) / peak * 100)
-    loss_sum = sum(l["NetPnL"] for l in losses)
-    win_sum  = sum(w["NetPnL"] for w in wins)
-    pf = round(abs(win_sum / loss_sum), 2) if loss_sum != 0 else None
-
-    # Streaks
-    max_ws = cur_ws = max_ls = cur_ls = 0
+    ws = ls = mws = mls = 0
     for t in trades:
-        if t["NetPnL"] > 0: cur_ws += 1; cur_ls = 0; max_ws = max(max_ws, cur_ws)
-        else:               cur_ls += 1; cur_ws = 0; max_ls = max(max_ls, cur_ls)
-
+        if t["NetPnL"] > 0: ws += 1; ls = 0; mws = max(mws, ws)
+        else:               ls += 1; ws = 0; mls = max(mls, ls)
+    win_sum  = sum(w["NetPnL"] for w in wins)
+    loss_sum = sum(l["NetPnL"] for l in losses)
+    pf = round(abs(win_sum / loss_sum), 2) if loss_sum else None
     return {
         "trades": len(trades), "wins": len(wins), "losses": len(losses),
-        "win_rate":    round(len(wins) / len(trades) * 100, 1),
-        "total_pnl":   round(win_sum + loss_sum, 0),
-        "return_pct":  round((final_cap - init_cap) / init_cap * 100, 2),
-        "final_cap":   round(final_cap, 0),
-        "avg_win":     round(win_sum / len(wins), 0)   if wins   else 0,
-        "avg_loss":    round(loss_sum / len(losses), 0) if losses else 0,
+        "win_rate":   round(len(wins) / len(trades) * 100, 1),
+        "total_pnl":  round(win_sum + loss_sum, 0),
+        "return_pct": round((final_cap - init_cap) / init_cap * 100, 2),
+        "final_cap":  round(final_cap, 0),
+        "avg_win":    round(win_sum / len(wins), 0)    if wins   else 0,
+        "avg_loss":   round(loss_sum / len(losses), 0) if losses else 0,
         "profit_factor": pf,
-        "max_dd":      round(mdd, 2),
-        "max_win_streak":  max_ws,
-        "max_loss_streak": max_ls,
+        "max_dd":     round(mdd, 2),
+        "max_win_streak":  mws,
+        "max_loss_streak": mls,
     }
 
 
 def run_backtest_job(ticker, start_date, end_date, p, send_tg):
     bt_state.update({"running": True, "error": None, "result": None,
-                     "progress": 0, "total": 3, "current": "Fetching data…"})
+                     "progress": 0, "total": 8, "current": "Fetching data..."})
     try:
-        df = _bt_prepare(ticker, start_date, end_date, p)
-        if df is None:
-            raise ValueError(
-                f"Could not fetch data for {ticker}. "
-                f"Check the ticker is valid (e.g. RELIANCE.NS) and date range is not too recent."
-            )
-        bt_state["current"] = "Detecting signals…"
-        sigs = _bt_signals(df, start_date, p)
+        df = _bt_fetch(ticker, start_date, end_date)
+        if df is None: raise ValueError(f"No data for {ticker}")
 
-        all_trades = []; results = {}
-        for i, mode in enumerate(["2R","3R","EMA9"], 1):
-            bt_state.update({"current": f"Simulating {mode} exit…", "progress": i})
-            trades, final_cap = _bt_simulate(sigs, df, mode, p)
-            metrics = _bt_metrics(trades, p["initial_cash"], final_cap)
-            results[mode] = {"metrics": metrics}
+        bt_state.update({"current": "Detecting setups...", "progress": 1})
+        sd = pd.Timestamp(start_date)
+        all_setups = detect_setups_all(df, p)
+        all_setups = [s for s in all_setups if df.index[s["consol_start_idx"]] >= sd]
+
+        results_by_key = {}
+        metrics_out    = {}
+        all_trades     = []
+        combos = [("EOD","2R"),("EOD","3R"),("EOD","EMA9"),
+                  ("BREAK","2R"),("BREAK","3R"),("BREAK","EMA9")]
+
+        for i, (etype, emode) in enumerate(combos, 2):
+            bt_state.update({"current": f"Simulating {etype}/{emode}...", "progress": i})
+            trades, fc = _bt_simulate(all_setups, df, etype, emode, p)
+            results_by_key[(etype, emode)] = trades
+            metrics_out[f"{etype}/{emode}"] = _bt_metrics(trades, p["initial_cash"], fc)
             all_trades.extend(trades)
             time.sleep(0.05)
 
         short = ticker.replace(".NS","")
-
-        # Build chart data — price series + EMA lines + all trades for selected mode
-        chart_dates  = [d.strftime("%Y-%m-%d") for d in df.index if pd.Timestamp(start_date) <= d]
-        df_chart     = df[df.index >= pd.Timestamp(start_date)]
-        chart_data   = {
-            "dates":  [d.strftime("%Y-%m-%d") for d in df_chart.index],
-            "close":  [round(float(v), 2) for v in df_chart["Close"]],
-            "ema9":   [round(float(v), 2) for v in df_chart["EMA9"]],
-            "ema20":  [round(float(v), 2) for v in df_chart["EMA20"]],
-        }
-
-        # Per-mode trade lists for chart markers + CSV
-        results_full = {}
-        for mode in ["2R","3R","EMA9"]:
-            trades_for_mode = [t for t in all_trades if t["Exit_Mode"] == mode]
-            results_full[mode] = {
-                "metrics": results[mode]["metrics"],
-                "trades":  trades_for_mode,
-            }
-
+        bt_state.update({"progress": 8, "current": "Done"})
         bt_state["result"] = {
             "ticker": short, "start": start_date, "end": end_date,
-            "signals": len(sigs),
-            "params": {k: p[k] for k in ["ema_proximity","max_candle_rng","max_sl_pct",
-                                          "initial_cash","risk_per_trade"]},
-            "results":    results_full,
-            "chart_data": chart_data,
+            "total_setups": len(all_setups),
+            "params": {k: p[k] for k in ["min_move_pct","box_tight","min_consol_days",
+                                          "initial_cash","risk_per_trade","breakout_pct"]},
+            "results": metrics_out,
         }
 
         if send_tg and TELEGRAM_ENABLED and BOT_TOKEN:
-            _send_backtest_telegram(short, results, all_trades, start_date, end_date)
+            _send_bt_telegram(short, metrics_out, all_trades,
+                              results_by_key, df, all_setups,
+                              start_date, end_date, p)
 
     except Exception as e:
+        import traceback; traceback.print_exc()
         bt_state["error"] = str(e)
     finally:
         bt_state.update({"running": False, "current": "Done"})
 
 
-def _send_backtest_telegram(ticker, results, all_trades, start, end):
-    labels = {"2R": "Exit 2R", "3R": "Exit 3R", "EMA9": "Trail EMA9"}
-    lines  = [f"📊 <b>Backtest: {ticker}</b>  ({start} → {end})\n"]
-    for mode, data in results.items():
-        m = data["metrics"]
+def _send_bt_telegram(ticker, metrics_out, all_trades, results_by_key,
+                      df, setups, start, end, p):
+    lines = [f"📊 <b>Backtest: {ticker}</b>  ({start} to {end})\n"
+             f"Setups found: {len(setups)}\n"]
+    for combo, m in metrics_out.items():
         if not m: continue
-        pf = f"{m['profit_factor']}" if m["profit_factor"] else "∞"
+        pf = str(m["profit_factor"]) if m["profit_factor"] else "inf"
         lines.append(
-            f"<b>{labels[mode]}</b>\n"
-            f"  Trades {m['trades']} | Win {m['win_rate']}% | Return {m['return_pct']}%\n"
-            f"  PF {pf} | MaxDD {m['max_dd']}% | Cap ₹{m['final_cap']:,.0f}\n"
-            f"  🏆 WStreak {m['max_win_streak']} | 📉 LStreak {m['max_loss_streak']}\n"
-        )
+            f"<b>{combo}</b>\n"
+            f"  Trades:{m['trades']}  Win:{m['win_rate']}%  Ret:{m['return_pct']}%\n"
+            f"  PF:{pf}  MaxDD:{m['max_dd']}%  Cap:{m['final_cap']:,.0f}\n"
+            f"  WS:{m['max_win_streak']}  LS:{m['max_loss_streak']}\n")
     _send_telegram("\n".join(lines))
 
-    if not all_trades: return
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=all_trades[0].keys())
-    writer.writeheader(); writer.writerows(all_trades)
-    buf.seek(0)
+    # Equity chart
     try:
-        req.post(
-            f"https://api.telegram.org/bot{BOT_TOKEN}/sendDocument",
-            data={"chat_id": TELEGRAM_CHAT_ID,
-                  "caption": f"Backtest trades — {ticker} ({start}→{end})"},
-            files={"document": (f"bt_{ticker}_{start}_{end}.csv",
-                                buf.read().encode(), "text/csv")},
-            timeout=20,
-        )
+        eq = _make_equity_chart(results_by_key, ticker, start, end, p["initial_cash"])
+        _send_telegram_photo(eq, caption=f"Equity curves -- {ticker}")
     except Exception: pass
 
-
-
-# ══════════════════════════════════════════════════════════════════
-# FULL F&O SCAN BACKTEST ENGINE
-# ══════════════════════════════════════════════════════════════════
-
-def run_full_scan_backtest(start_date, end_date, p, send_tg):
-    """
-    Backtests every F&O ticker independently.
-    Returns per-stock leaderboard + combined portfolio equity.
-    """
-    scan_bt_state.update({
-        "running": True, "error": None, "result": None,
-        "progress": 0, "total": len(TICKERS), "current": "Starting…",
-    })
-
-    stock_results = []
-    all_trades    = []
-    failed        = []
-    succeeded     = 0
-
-    for idx, ticker in enumerate(TICKERS):
-        short = ticker.replace(".NS", "")
-        scan_bt_state.update({"progress": idx + 1,
-                               "current": f"{short} ({idx+1}/{len(TICKERS)})"})
+    # Up to 3 setup charts
+    for setup in setups[:3]:
         try:
-            df = _bt_prepare(ticker, start_date, end_date, p)
-            if df is None:
-                failed.append(short)
-                time.sleep(0.5)   # back off before next ticker
-                continue
+            ce = setup["consol_end_idx"]
+            bk = None
+            for k in range(ce+1, min(ce+5, len(df))):
+                if float(df.iloc[k]["Close"]) > setup["box_high"]:
+                    bk = k; break
+            ep = round(float(df.iloc[bk]["Close"]), 2) if bk else None
+            chart = _make_setup_chart(df, setup, ticker, entry_price=ep,
+                                      title_suffix=f"({setup['consol_start_date']})")
+            _send_telegram_photo(chart,
+                caption=f"{ticker}  +{setup['move_pct']}%  {setup['consol_days']}d box")
+        except Exception: pass
 
-            sigs = _bt_signals(df, start_date, p)
-            if not sigs:
-                time.sleep(0.3)
-                continue
-
-            succeeded += 1
-            for mode in ["2R", "3R", "EMA9"]:
-                trades, final_cap = _bt_simulate(sigs, df, mode, p)
-                if not trades:
-                    continue
-                m = _bt_metrics(trades, p["initial_cash"], final_cap)
-                stock_results.append({
-                    "ticker":          short,
-                    "exit_mode":       mode,
-                    "trades":          m["trades"],
-                    "win_rate":        m["win_rate"],
-                    "return_pct":      m["return_pct"],
-                    "profit_factor":   m["profit_factor"],
-                    "max_dd":          m["max_dd"],
-                    "max_win_streak":  m["max_win_streak"],
-                    "max_loss_streak": m["max_loss_streak"],
-                })
-                for t in trades:
-                    t2 = dict(t); t2["Ticker"] = short
-                    all_trades.append(t2)
-
-        except Exception as e:
-            failed.append(f"{short}:{e}")
-            time.sleep(0.5)
-            continue
-
-        # Throttle: 0.8s between tickers to avoid yfinance rate limiting
-        time.sleep(0.8)
-
-    print(f"[BT] Full scan done — {succeeded} stocks with data, "
-          f"{len([r for r in stock_results if r['exit_mode']=='2R'])} with trades, "
-          f"{len(failed)} failed")
-
-    if not stock_results:
-        # Give a helpful error with how many stocks actually failed
-        msg = (f"No trades found across {len(TICKERS)} stocks. "
-               f"{len(failed)} tickers had no data (yfinance may be throttling). "
-               f"Try a longer date range e.g. 2020-01-01 to today, or wait a few minutes and retry.")
-        scan_bt_state.update({"running": False, "error": msg})
-        return
-
-    # ── Leaderboard: top 10 per exit mode ─────────────────────────
-    leaderboard = {}
-    for mode in ["2R", "3R", "EMA9"]:
-        rows = [r for r in stock_results if r["exit_mode"] == mode]
-        rows.sort(key=lambda x: x["return_pct"], reverse=True)
-        leaderboard[mode] = rows[:10]
-
-    # ── Combined portfolio simulation ─────────────────────────────
-    # For each exit mode, take all trades, sort by entry date,
-    # re-run through shared capital sequentially
-    combined = {}
-    for mode in ["2R", "3R", "EMA9"]:
-        mode_trades = [t for t in all_trades if t["Exit_Mode"] == mode]
-        mode_trades.sort(key=lambda x: x["Entry"])
-        cap = p["initial_cash"]; equity = [cap]
-        for t in mode_trades:
-            cap += t["NetPnL"]
-            equity.append(round(cap, 0))
-        # Metrics on combined
-        cm = _bt_metrics(mode_trades, p["initial_cash"], cap) if mode_trades else {}
-        combined[mode] = {
-            "metrics": cm,
-            "equity_curve": equity[::max(1, len(equity)//200)],  # max 200 points
-        }
-
-    # ── Summary stats ──────────────────────────────────────────────
-    total_stocks_traded = len(set(r["ticker"] for r in stock_results))
-
-    scan_bt_state["result"] = {
-        "type":                 "full_scan",
-        "start":                start_date,
-        "end":                  end_date,
-        "total_stocks":         len(TICKERS),
-        "stocks_with_trades":   total_stocks_traded,
-        "params":               {k: p[k] for k in ["ema_proximity","max_candle_rng","max_sl_pct"]},
-        "leaderboard":          leaderboard,
-        "combined":             combined,
-    }
-
-    if send_tg and TELEGRAM_ENABLED and BOT_TOKEN:
-        _send_full_scan_telegram(scan_bt_state["result"])
-
-    scan_bt_state.update({"running": False, "current": "Done"})
+    # CSV
+    if all_trades:
+        buf = io.StringIO()
+        w = csv.DictWriter(buf, fieldnames=all_trades[0].keys())
+        w.writeheader(); w.writerows(all_trades)
+        buf.seek(0)
+        _send_telegram_doc(buf.read().encode(),
+                           f"bt_{ticker}_{start}_{end}.csv",
+                           caption=f"All trades -- {ticker}")
 
 
-def _send_full_scan_telegram(result):
-    lines = [
-        f"📊 <b>Full F&O Scan Backtest</b>  ({result['start']} → {result['end']})",
-        f"Stocks traded: <b>{result['stocks_with_trades']}</b> / {result['total_stocks']}\n",
-    ]
-    labels = {"2R": "Exit 2R", "3R": "Exit 3R", "EMA9": "Trail EMA9"}
-    for mode, data in result["combined"].items():
-        m = data["metrics"]
-        if not m: continue
-        pf = str(m["profit_factor"]) if m["profit_factor"] else "∞"
-        lines.append(
-            f"<b>{labels[mode]}</b> (Combined Portfolio)\n"
-            f"  Return {m['return_pct']}% | Win {m['win_rate']}% | PF {pf}\n"
-            f"  MaxDD {m['max_dd']}% | Trades {m['trades']}\n"
-        )
-    for mode, top10 in result["leaderboard"].items():
-        lines.append(f"\n🏆 <b>Top 10 — {labels[mode]}</b>")
-        for i, r in enumerate(top10[:5], 1):
-            lines.append(f"  {i}. {r['ticker']} → {r['return_pct']}% | W {r['win_rate']}%")
-    _send_telegram("\n".join(lines))
-
-# ══════════════════════════════════════════════════════════════════
-# EOD SUMMARY
-# ══════════════════════════════════════════════════════════════════
-
-def send_eod_summary():
-    sigs = list(state["signals_today"].values())
-    today = ist_now().strftime("%d %b %Y")
-    if not sigs:
-        msg = f"📋 <b>EOD Summary — {today}</b>\n\nNo signals today."
-    else:
-        lines = [f"📋 <b>EOD Summary — {today}</b>",
-                 f"<b>{len(sigs)} signal(s)</b>\n",
-                 "<code>Stock        Entry      SL      2R      3R</code>"]
-        for s in sigs:
-            lines.append(f"<code>{s['ticker']:<12}"
-                         f"₹{s['entry']:>7.2f} ₹{s['stop_loss']:>7.2f} "
-                         f"₹{s['target_2r']:>7.2f} ₹{s['target_3r']:>7.2f}</code>")
-        msg = "\n".join(lines)
-    _send_telegram(msg)
-
-
-# ══════════════════════════════════════════════════════════════════
+# ======================================================
 # PERSISTENCE
-# ══════════════════════════════════════════════════════════════════
+# ======================================================
 
-def _persist_signal(sig):
-    f = os.path.join(DATA_DIR, f"signals_{date.today()}.json")
+def _persist_signal(sig, kind):
+    f = os.path.join(DATA_DIR, f"{kind}_{date.today()}.json")
     existing = []
     if os.path.exists(f):
         try:
@@ -979,7 +889,7 @@ def _persist_signal(sig):
         except Exception: pass
     existing = [s for s in existing if s.get("ticker") != sig["ticker"]]
     existing.append(sig)
-    with open(f, "w") as fh: json.dump(existing, fh, indent=2)
+    with open(f, "w") as fh: json.dump(existing, fh, indent=2, default=str)
 
 
 def _persist_scan_log(summary):
@@ -993,59 +903,62 @@ def _persist_scan_log(summary):
     with open(f, "w") as fh: json.dump(existing[:200], fh, indent=2)
 
 
+def _load_today_signals():
+    for kind, key in [("watchlist","watchlist_today"),("breakout","breakouts_today")]:
+        f = os.path.join(DATA_DIR, f"{kind}_{date.today()}.json")
+        if os.path.exists(f):
+            try:
+                with open(f) as fh:
+                    for s in json.load(fh): state[key][s["ticker"]] = s
+            except Exception: pass
+
+
 def _load_history():
     history = []
     for fname in sorted(os.listdir(DATA_DIR), reverse=True):
-        if fname.startswith("signals_") and fname.endswith(".json"):
-            ds = fname.replace("signals_","").replace(".json","")
-            try:
-                with open(os.path.join(DATA_DIR, fname)) as fh:
-                    sigs = json.load(fh)
-                history.append({"date": ds, "signals": sigs, "count": len(sigs)})
-            except Exception: pass
-    return history
+        for kind in ["breakout","watchlist"]:
+            if fname.startswith(f"{kind}_") and fname.endswith(".json"):
+                ds = fname.replace(f"{kind}_","").replace(".json","")
+                try:
+                    with open(os.path.join(DATA_DIR, fname)) as fh:
+                        sigs = json.load(fh)
+                    history.append({"date": ds, "kind": kind,
+                                    "signals": sigs, "count": len(sigs)})
+                except Exception: pass
+    return sorted(history, key=lambda x: x["date"], reverse=True)
 
 
-def _load_today_signals():
-    f = os.path.join(DATA_DIR, f"signals_{date.today()}.json")
-    if os.path.exists(f):
-        try:
-            with open(f) as fh:
-                for s in json.load(fh): state["signals_today"][s["ticker"]] = s
-        except Exception: pass
+# ======================================================
+# EOD SUMMARY
+# ======================================================
+
+def send_eod_summary():
+    today = ist_now().strftime("%d %b %Y")
+    w = list(state["watchlist_today"].values())
+    b = list(state["breakouts_today"].values())
+    lines = [f"<b>EOD Summary -- {today}</b>\n"]
+    if b:
+        lines.append(f"<b>{len(b)} Breakout(s)</b>")
+        for s in b:
+            lines.append(f"  {s['ticker']}  Box:{s['box_high']}  "
+                         f"Entry:{s.get('breakout_entry_eod','--')}")
+    if w:
+        lines.append(f"\n<b>{len(w)} Watchlist</b>")
+        for s in w:
+            lines.append(f"  {s['ticker']}  Box:{s['box_high']}  ({s['consol_days']}d)")
+    if not b and not w:
+        lines.append("No signals today.")
+    _send_telegram("\n".join(lines))
 
 
-# ══════════════════════════════════════════════════════════════════
-# TELEGRAM
-# ══════════════════════════════════════════════════════════════════
-
-def _send_telegram(msg):
-    if not TELEGRAM_ENABLED or not BOT_TOKEN: return
-    try:
-        req.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                 json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "HTML"},
-                 timeout=10)
-    except Exception: pass
-
-
-def _send_telegram_signal(sig):
-    _send_telegram(
-        f"🚨 <b>SIGNAL — {sig['ticker']}</b>\n📅 {sig['timestamp']}\n\n"
-        f"🟢 <b>Entry    :</b> ₹{sig['entry']}\n"
-        f"🔴 <b>Stop Loss:</b> ₹{sig['stop_loss']} ({sig['sl_pct']}%)\n"
-        f"🎯 <b>Target 2R:</b> ₹{sig['target_2r']}\n"
-        f"🏆 <b>Target 3R:</b> ₹{sig['target_3r']}\n"
-        f"💹 <b>Live     :</b> ₹{sig['live_price']}\n\n"
-        f"<i>EMA9: {sig['ema9']} | EMA20: {sig['ema20']}</i>"
-    )
-
-
-# ══════════════════════════════════════════════════════════════════
+# ======================================================
 # SCHEDULER
-# ══════════════════════════════════════════════════════════════════
+# ======================================================
 
 def _reset_cache():
-    with _lock: state["signals_today"].clear()
+    with _lock:
+        state["watchlist_today"].clear()
+        state["breakouts_today"].clear()
     _load_today_signals()
 
 
@@ -1061,25 +974,30 @@ def _start_scheduler():
     threading.Thread(target=_loop, daemon=True).start()
 
 
-# ══════════════════════════════════════════════════════════════════
+# ======================================================
 # FLASK ROUTES
-# ══════════════════════════════════════════════════════════════════
+# ======================================================
 
 app = Flask(__name__)
 
 
 @app.route("/")
-def index():
-    return render_template("index.html")
+def index(): return render_template("index.html")
 
 
 @app.route("/api/status")
 def api_status():
     with _lock:
-        s = {k: v for k, v in state.items() if k not in ("signals_today","scan_log")}
-    s.update({"market_open": is_market_open(), "ist_time": ist_now().strftime("%H:%M:%S"),
-              "ist_date": ist_now().strftime("%d %b %Y"),
-              "total_tickers": len(TICKERS), "signals_count": len(state["signals_today"])})
+        s = {k: v for k, v in state.items()
+             if k not in ("watchlist_today","breakouts_today","scan_log")}
+    s.update({
+        "market_open":     is_market_open(),
+        "ist_time":        ist_now().strftime("%H:%M:%S"),
+        "ist_date":        ist_now().strftime("%d %b %Y"),
+        "total_tickers":   len(TICKERS),
+        "watchlist_count": len(state["watchlist_today"]),
+        "breakout_count":  len(state["breakouts_today"]),
+    })
     return jsonify(s)
 
 
@@ -1109,7 +1027,8 @@ def api_settings_reset():
 def api_scan_start():
     if state["scan_running"]:
         return jsonify({"ok": False, "msg": "Scan already running"})
-    _bg_scan(manual=True); return jsonify({"ok": True})
+    _bg_scan(manual=True)
+    return jsonify({"ok": True})
 
 
 @app.route("/api/scan/stop", methods=["POST"])
@@ -1122,23 +1041,36 @@ def api_scan_stop():
 def api_scan_progress():
     with _lock:
         return jsonify({
-            "running": state["scan_running"], "scanned": state["scanned"],
-            "total": state["total"], "current_ticker": state["current_ticker"],
-            "signals_so_far": len(state["signals_today"]),
-            "pct": round(state["scanned"] / state["total"] * 100, 1) if state["total"] else 0,
+            "running":          state["scan_running"],
+            "scanned":          state["scanned"],
+            "total":            state["total"],
+            "current_ticker":   state["current_ticker"],
+            "watchlist_so_far": len(state["watchlist_today"]),
+            "breakouts_so_far": len(state["breakouts_today"]),
+            "pct": round(state["scanned"] / state["total"] * 100, 1)
+                   if state["total"] else 0,
         })
 
 
 @app.route("/api/schedule/toggle", methods=["POST"])
 def api_schedule_toggle():
     with _lock:
-        state["auto_schedule"] = not state["auto_schedule"]; val = state["auto_schedule"]
+        state["auto_schedule"] = not state["auto_schedule"]
+        val = state["auto_schedule"]
     return jsonify({"ok": True, "auto_schedule": val})
 
 
-@app.route("/api/signals/today")
-def api_signals_today():
-    sigs = sorted(state["signals_today"].values(), key=lambda x: x["timestamp"], reverse=True)
+@app.route("/api/signals/watchlist")
+def api_signals_watchlist():
+    sigs = sorted(state["watchlist_today"].values(),
+                  key=lambda x: x["timestamp"], reverse=True)
+    return jsonify({"date": ist_now().strftime("%d %b %Y"), "signals": sigs})
+
+
+@app.route("/api/signals/breakouts")
+def api_signals_breakouts():
+    sigs = sorted(state["breakouts_today"].values(),
+                  key=lambda x: x["timestamp"], reverse=True)
     return jsonify({"date": ist_now().strftime("%d %b %Y"), "signals": sigs})
 
 
@@ -1158,10 +1090,10 @@ def api_backtest_run():
     if bt_state["running"]:
         return jsonify({"ok": False, "msg": "Backtest already running"})
     data       = request.get_json(silent=True) or {}
-    ticker     = data.get("ticker", "RELIANCE").upper().strip()
+    ticker     = data.get("ticker","RELIANCE").upper().strip()
     if not ticker.endswith(".NS"): ticker += ".NS"
-    start_date = data.get("start_date", "2022-01-01")
-    end_date   = data.get("end_date",   ist_now().strftime("%Y-%m-%d"))
+    start_date = data.get("start_date","2022-01-01")
+    end_date   = data.get("end_date", ist_now().strftime("%Y-%m-%d"))
     send_tg    = bool(data.get("send_telegram", False))
     p = dict(params)
     for k in PARAM_DEFAULTS:
@@ -1186,101 +1118,9 @@ def api_backtest_result():
     return jsonify(bt_state["result"] or {})
 
 
-@app.route("/api/backtest/csv")
-def api_backtest_csv():
-    """Download trade log as CSV for the selected exit mode."""
-    if not bt_state["result"]:
-        return "No backtest result available", 404
-    mode   = request.args.get("mode", "2R")
-    result = bt_state["result"]
-    trades = result.get("results", {}).get(mode, {}).get("trades", [])
-    if not trades:
-        return "No trades for this mode", 404
-
-    CSV_COLS = ["Exit_Mode","Entry_Date","Exit_Date","Entry_Price","Stop_Loss",
-                "Exit_Price","R_Multiple","Qty","Gross_PnL","Net_PnL","Capital","Outcome"]
-
-    buf = io.StringIO()
-    writer = csv.DictWriter(buf, fieldnames=CSV_COLS, extrasaction="ignore")
-    writer.writeheader()
-    writer.writerows(trades)
-    buf.seek(0)
-
-    ticker = result.get("ticker","stock")
-    fname  = f"{ticker}_backtest_{mode}_{result.get('start','')}_{result.get('end','')}.csv"
-    from flask import Response
-    return Response(
-        buf.read(),
-        mimetype="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={fname}"}
-    )
-
-
-
-@app.route("/api/backtest/full/run", methods=["POST"])
-def api_full_bt_run():
-    if scan_bt_state["running"] or bt_state["running"]:
-        return jsonify({"ok": False, "msg": "A backtest is already running"})
-    data       = request.get_json(silent=True) or {}
-    start_date = data.get("start_date", "2022-01-01")
-    end_date   = data.get("end_date",   ist_now().strftime("%Y-%m-%d"))
-    send_tg    = bool(data.get("send_telegram", False))
-    p = dict(params)
-    for k in PARAM_DEFAULTS:
-        if k in data:
-            try: p[k] = float(data[k])
-            except Exception: pass
-    threading.Thread(target=run_full_scan_backtest,
-                     args=(start_date, end_date, p, send_tg),
-                     daemon=True).start()
-    return jsonify({"ok": True})
-
-
-@app.route("/api/backtest/full/progress")
-def api_full_bt_progress():
-    return jsonify({
-        "running":  scan_bt_state["running"],
-        "progress": scan_bt_state["progress"],
-        "total":    scan_bt_state["total"],
-        "current":  scan_bt_state["current"],
-        "error":    scan_bt_state["error"],
-        "pct":      round(scan_bt_state["progress"] / scan_bt_state["total"] * 100, 1)
-                    if scan_bt_state["total"] else 0,
-    })
-
-
-@app.route("/api/backtest/full/result")
-def api_full_bt_result():
-    return jsonify(scan_bt_state["result"] or {})
-
-
-@app.route("/api/backtest/test")
-def api_backtest_test():
-    """Quick test — downloads one ticker and returns what happened."""
-    ticker = request.args.get("ticker", "RELIANCE.NS")
-    start  = request.args.get("start",  "2022-01-01")
-    end    = request.args.get("end",    ist_now().strftime("%Y-%m-%d"))
-    try:
-        df = _fetch_ohlcv(ticker, start, end)
-        if df is None:
-            return jsonify({"ok": False, "msg": f"All fetch methods failed for {ticker}. Check Railway logs for details.",
-                            "ticker": ticker, "start": start, "end": end})
-        sigs = _bt_signals(df, start, params) if df is not None else []
-        return jsonify({
-            "ok":         True,
-            "ticker":     ticker,
-            "rows":       len(df),
-            "signals":    len(sigs),
-            "cols":       list(df.columns),
-            "date_range": [str(df.index[0].date()), str(df.index[-1].date())],
-            "sample_close": round(float(df["Close"].iloc[-1]), 2),
-        })
-    except Exception as e:
-        return jsonify({"ok": False, "msg": str(e), "ticker": ticker})
-
-# ══════════════════════════════════════════════════════════════════
+# ======================================================
 # STARTUP
-# ══════════════════════════════════════════════════════════════════
+# ======================================================
 
 _load_today_signals()
 _start_scheduler()
